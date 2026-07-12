@@ -2,6 +2,9 @@
 
 Synapse is an interactive, zero-typing daily coding game designed to teach programming principles to absolute beginners. It features a progressive 200-level syllabus, interactive tutorials, drag-and-drop Parsons puzzles, and multiple-choice questions to build coding familiarity from scratch.
 
+### 🌐 Live Production Link
+Play the live web application here: **[https://coding-game-theta.vercel.app/](https://coding-game-theta.vercel.app/)**
+
 ---
 
 ## 🚀 Key Features
@@ -53,3 +56,21 @@ npm run dev
 1. Open **Android Studio**.
 2. Select **Open Project** and choose the `android/` directory.
 3. Select an emulator or connected phone, and press **Run** (`Shift + F10`).
+
+---
+
+## ☁️ Production Deployment Configuration
+
+### Backend Deployment (e.g. Render)
+* Link your GitHub repository to a new Render **Web Service**.
+* Set **Root Directory** to `backend`.
+* Start command: `node server.js`.
+* *Note: For persistent production usage, update `db.js` to connect to a cloud database service (like MongoDB or Supabase) rather than using the local `database.json` file.*
+
+### Frontend Deployment (e.g. Vercel)
+* Link the repository to a new Vercel project.
+* Set **Framework Preset** to `Vite`.
+* Set **Root Directory** to `web`.
+* Configure the following Environment Variable:
+  - **Key**: `VITE_API_BASE`
+  - **Value**: `https://YOUR-RENDER-BACKEND-URL.onrender.com/api`
