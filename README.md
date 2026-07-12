@@ -1,20 +1,23 @@
 # ⚡ Synapse - Daily Coding Curriculum
 
-Synapse is an interactive, zero-typing daily coding game designed to teach programming principles to absolute beginners. It features a progressive syllabus, interactive tutorials, drag-and-drop Parsons puzzles, and multiple-choice questions to build coding familiarity from scratch.
+Synapse is an interactive, zero-typing daily coding game designed to teach programming principles to absolute beginners. It features a progressive 200-level syllabus, interactive tutorials, drag-and-drop Parsons puzzles, and multiple-choice questions to build coding familiarity from scratch.
 
 ---
 
 ## 🚀 Key Features
 
 * **Dual Curriculum Track**: Learn either **Python** or **C++** with a single click. The tasks, code snippets, block structures, and tutorials adapt dynamically to your chosen language.
-* **Progressive Learning Syllabus**: Levels unlock sequentially based on completion count:
-  - **Level 1**: Printing Text (`print()` / `std::cout`)
-  - **Level 2**: Declaring Variables (Assignments & Datatypes)
-  - **Level 3**: Swapping Variables (Temporary storage logic)
-  - **Level 4**: Conditional Decisions (`if-else` branching)
-  - **Level 5**: Loops & Counters (`while` loops)
-  - **Level 6**: Array/List Indexing (Accessing indices)
-  - **Level 7**: Summing Arrays (Iterative accumulation)
+* **200 Progressive Learning Levels**: Levels unlock sequentially based on completion count. The syllabus revolves around 10 repeating core programming concepts:
+  - **Topic 0**: Printing Text (`print()` / `std::cout` outputs)
+  - **Topic 1**: Declaring Variables (assignments, values, and calculations)
+  - **Topic 2**: Swapping Variables (swapping variable references using a temp)
+  - **Topic 3**: Conditional Decisions (`if-else` branching)
+  - **Topic 4**: Loops & Counters (`while` loop boundaries)
+  - **Topic 5**: Array/List Indexing (referencing zero-based list offsets)
+  - **Topic 6**: Summing Lists (iterative sum accumulation checks)
+  - **Topic 7**: String Concatenation (combining string outputs)
+  - **Topic 8**: Logical Operators (evaluating compound conditions using `and`/`or`/`&&`/`||`)
+  - **Topic 9**: Function Returns (defining functions and returning results)
 * **Concept Tutorials**: Integrated sidebar guides explaining active level logic, formatting rules, and code patterns.
 * **Cloud Progress Sync**: Secure guest stats (Scores & Streaks) with a cloud login account to play seamlessly across Web browser clients and native Android Mobile clients.
 
