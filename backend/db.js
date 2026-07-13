@@ -4,7 +4,14 @@ import { fileURLToPath } from 'url';
 import crypto from 'crypto';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DB_PATH = path.join(__dirname, 'database.json');
+const DB_DIR = process.env.PERSISTENT_DIR || __dirname;
+
+// Ensure persistent directory exists if specified
+if (process.env.PERSISTENT_DIR && !fs.existsSync(DB_DIR)) {
+  fs.mkdirSync(DB_DIR, { recursive: true });
+}
+
+const DB_PATH = path.join(DB_DIR, 'database.json');
 
 // Initialize database file if it doesn't exist
 if (!fs.existsSync(DB_PATH)) {
@@ -193,6 +200,9 @@ export const db = {
 
     const primary = data.users[targetCanonicalId];
     const secondary = data.users[currentCanonicalId];
+    if (!secondary) {
+      throw new Error("Active device profile session not found on server. Please restart/reload app.");
+    }
 
     const mergedCompleted = Array.from(new Set([
       ...primary.completedChallenges,
