@@ -65,7 +65,10 @@ npm run dev
 * Link your GitHub repository to a new Render **Web Service**.
 * Set **Root Directory** to `backend`.
 * Start command: `node server.js`.
-* *Note: For persistent production usage, update `db.js` to connect to a cloud database service (like MongoDB or Supabase) rather than using the local `database.json` file.*
+* Configure the following Environment Variable for database persistence:
+  - **Key**: `MONGODB_URI`
+  - **Value**: `mongodb+srv://<username>:<password>@cluster0.mongodb.net/synapse?retryWrites=true&w=majority` *(Create a free M0 Shared Cluster on MongoDB Atlas to get your URI)*
+* *Note: If MONGODB_URI is not set, the server will gracefully fallback to using local file database.json storage.*
 
 ### Frontend Deployment (e.g. Vercel)
 * Link the repository to a new Vercel project.
