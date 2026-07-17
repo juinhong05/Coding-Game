@@ -1,6 +1,6 @@
 import express from 'express';
 import cors from 'cors';
-import { db } from './db.js';
+import { db, initDb } from './db.js';
 import { CHALLENGE_BANK, getChallengeForDate } from './challenges.js';
 
 const app = express();
@@ -14,6 +14,12 @@ app.use((req, res, next) => {
   console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
   next();
 });
+
+// Helper for display nicknames
+function getNickname(user) {
+  if (user.username) return user.username;
+  return user.nickname || `Coder_${user.syncCode}`;
+}
 
 // Root status page
 app.get('/', (req, res) => {
@@ -33,50 +39,52 @@ app.get('/', (req, res) => {
             margin: 0;
           }
           .card {
-            background: rgba(17, 24, 39, 0.7);
-            border: 1px solid rgba(6, 182, 212, 0.3);
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.08);
             border-radius: 16px;
             padding: 32px;
             text-align: center;
-            box-shadow: 0 0 25px rgba(6, 182, 212, 0.25);
+            box-shadow: 0 4px 30px rgba(0, 0, 0, 0.5);
+            backdrop-filter: blur(10px);
+            max-width: 400px;
           }
-          h1 { color: #06b6d4; margin-top: 0; }
-          p { color: #9ca3af; font-size: 14px; }
-          .badge {
+          h1 {
+            color: #06b6d4;
+            font-size: 28px;
+            margin-bottom: 8px;
+            letter-spacing: 1px;
+          }
+          .status {
             background: rgba(16, 185, 129, 0.15);
+            border: 1px solid #10b981;
             color: #10b981;
-            border: 1px solid rgba(16, 185, 129, 0.3);
-            padding: 4px 12px;
-            border-radius: 9999px;
-            font-size: 12px;
-            font-weight: bold;
+            padding: 6px 16px;
+            border-radius: 50px;
             display: inline-block;
-            margin-bottom: 16px;
+            font-weight: bold;
+            font-size: 13px;
+            margin-top: 16px;
+          }
+          p {
+            color: #9ca3af;
+            font-size: 14px;
+            line-height: 1.6;
           }
         </style>
       </head>
       <body>
         <div class="card">
-          <div class="badge">ONLINE</div>
-          <h1>⚡ SYNAPSE SERVER</h1>
-          <p>The daily coding challenges data vector mesh is active.</p>
-          <p style="font-family: monospace; font-size: 11px; margin-top: 24px; color: #6b7280;">PORT: 5000 | HOST: LOCALHOST</p>
+          <h1>SYNAPSE</h1>
+          <p>The daily coding challenges data vector mesh is active. Connecting Web clients and Android clients globally.</p>
+          <div class="status">● ONLINE</div>
         </div>
       </body>
     </html>
   `);
 });
 
-// Helper to generate username from syncCode
-function getNickname(user) {
-  if (user.username) {
-    return user.username;
-  }
-  return `Coder_${user.syncCode}`;
-}
-
-// 1. Get Challenge (Support Progressive Level mapping & active language selection)
-app.get('/api/challenges/daily', (req, res) => {
+// 1. Get Daily / Progressive Challenge
+app.get('/api/challenges/daily', async (req, res) => {
   const { userId } = req.query;
   
   try {
@@ -85,7 +93,7 @@ app.get('/api/challenges/daily', (req, res) => {
     let language = req.query.language || 'python';
     
     if (userId) {
-      const user = db.getUser(userId);
+      const user = await db.getUser(userId);
       if (user) {
         // Resolve active language if not explicitly set in query
         if (!req.query.language && user.preferredLanguage) {
@@ -160,9 +168,9 @@ app.post('/api/challenges/verify', (req, res) => {
 });
 
 // 3. Register Anonymous Profile
-app.post('/api/user/register', (req, res) => {
+app.post('/api/user/register', async (req, res) => {
   try {
-    const newUser = db.createUser();
+    const newUser = await db.createUser();
     res.status(201).json({
       id: newUser.id,
       syncCode: newUser.syncCode,
@@ -181,14 +189,14 @@ app.post('/api/user/register', (req, res) => {
 });
 
 // 4. Create Credentialed Account
-app.post('/api/user/register-account', (req, res) => {
+app.post('/api/user/register-account', async (req, res) => {
   const { userId, username, password } = req.body;
   if (!username || !password) {
     return res.status(400).json({ error: "Username and password are required" });
   }
 
   try {
-    const user = db.registerAccount(userId, username, password);
+    const user = await db.registerAccount(userId, username, password);
     res.status(200).json({
       id: user.canonicalId,
       syncCode: user.syncCode,
@@ -207,14 +215,14 @@ app.post('/api/user/register-account', (req, res) => {
 });
 
 // 5. Account Sign In / Login
-app.post('/api/user/login', (req, res) => {
+app.post('/api/user/login', async (req, res) => {
   const { username, password } = req.body;
   if (!username || !password) {
     return res.status(400).json({ error: "Username and password are required" });
   }
 
   try {
-    const user = db.login(username, password);
+    const user = await db.login(username, password);
     res.status(200).json({
       id: user.resolvedId,
       syncCode: user.syncCode,
@@ -233,14 +241,14 @@ app.post('/api/user/login', (req, res) => {
 });
 
 // 6. Set User Preferred Language
-app.post('/api/user/:id/language', (req, res) => {
+app.post('/api/user/:id/language', async (req, res) => {
   const { language } = req.body;
   if (!language || (language !== 'python' && language !== 'cpp')) {
     return res.status(400).json({ error: "Language must be 'python' or 'cpp'" });
   }
 
   try {
-    const updated = db.updateLanguage(req.params.id, language);
+    const updated = await db.updateLanguage(req.params.id, language);
     if (!updated) {
       return res.status(404).json({ error: "User not found" });
     }
@@ -263,9 +271,9 @@ app.post('/api/user/:id/language', (req, res) => {
 });
 
 // 7. Get User Profile
-app.get('/api/user/:id', (req, res) => {
+app.get('/api/user/:id', async (req, res) => {
   try {
-    const user = db.getUser(req.params.id);
+    const user = await db.getUser(req.params.id);
     if (!user) {
       return res.status(404).json({ error: "User not found" });
     }
@@ -287,10 +295,10 @@ app.get('/api/user/:id', (req, res) => {
 });
 
 // 8. Update Progress / Sync State
-app.post('/api/user/:id/progress', (req, res) => {
+app.post('/api/user/:id/progress', async (req, res) => {
   const { score, streak, lastCompletedDate, completedChallenges, completionHistory } = req.body;
   try {
-    const updated = db.updateProgress(req.params.id, {
+    const updated = await db.updateProgress(req.params.id, {
       score,
       streak,
       lastCompletedDate,
@@ -320,14 +328,14 @@ app.post('/api/user/:id/progress', (req, res) => {
 });
 
 // 9. Link Devices / Profiles
-app.post('/api/user/:id/sync/link', (req, res) => {
+app.post('/api/user/:id/sync/link', async (req, res) => {
   const { syncCode } = req.body;
   if (!syncCode) {
     return res.status(400).json({ error: "Sync code is required" });
   }
 
   try {
-    const merged = db.linkProfiles(req.params.id, syncCode);
+    const merged = await db.linkProfiles(req.params.id, syncCode);
     res.json({
       id: merged.canonicalId,
       syncCode: merged.syncCode,
@@ -346,36 +354,24 @@ app.post('/api/user/:id/sync/link', (req, res) => {
 });
 
 // 10. Get Leaderboard (Top 10 players)
-app.get('/api/leaderboard', (req, res) => {
+app.get('/api/leaderboard', async (req, res) => {
   try {
-    const data = JSON.parse(fs.readFileSync(new URL('./database.json', import.meta.url), 'utf8'));
-    
-    const uniqueUsers = {};
-    Object.keys(data.users).forEach(id => {
-      const canonicalId = db.getUser(id)?.id;
-      if (canonicalId && !uniqueUsers[canonicalId]) {
-        uniqueUsers[canonicalId] = data.users[canonicalId];
-      }
-    });
-
-    const leaderboard = Object.values(uniqueUsers)
-      .map(user => ({
-        nickname: getNickname(user),
-        score: user.score,
-        streak: user.streak,
-        lastCompleted: user.lastCompletedDate
-      }))
-      .sort((a, b) => b.score - a.score)
-      .slice(0, 10);
-
+    const rawLeaderboard = await db.getLeaderboard();
+    const leaderboard = rawLeaderboard.map(user => ({
+      nickname: getNickname(user),
+      score: user.score,
+      streak: user.streak,
+      lastCompleted: user.lastCompletedDate
+    }));
     res.json(leaderboard);
   } catch (err) {
     res.status(500).json({ error: "Failed to get leaderboard" });
   }
 });
 
-// Start Server
-import fs from 'fs';
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Daily Challenge Server running on http://localhost:${PORT}`);
+// Initialize database connection then start listener
+initDb().then(() => {
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`Daily Challenge Server running on http://localhost:${PORT}`);
+  });
 });
