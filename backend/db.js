@@ -13,41 +13,84 @@ if (process.env.PERSISTENT_DIR && !fs.existsSync(DB_DIR)) {
 
 const DB_PATH = path.join(DB_DIR, 'database.json');
 
-// Initialize database file if it doesn't exist
+// Initialize local database file if it doesn't exist
 if (!fs.existsSync(DB_PATH)) {
   fs.writeFileSync(DB_PATH, JSON.stringify({ users: {} }, null, 2));
 }
 
-// MongoDB Connection State
-let dbClient = null;
-let usersCollection = null;
-let isMongo = false;
+// Supabase State
+let supabase = null;
+let isSupabase = false;
 
 // Async Database Initializer
 export async function initDb() {
-  if (process.env.MONGODB_URI) {
+  const supabaseUrl = process.env.SUPABASE_URL;
+  const supabaseKey = process.env.SUPABASE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY;
+
+  if (supabaseUrl && supabaseKey) {
     try {
-      const { MongoClient } = await import('mongodb');
-      console.log("Connecting to Cloud MongoDB database...");
-      dbClient = new MongoClient(process.env.MONGODB_URI);
-      await dbClient.connect();
-      const dbInstance = dbClient.db('synapse');
-      usersCollection = dbInstance.collection('users');
+      const { createClient } = await import('@supabase/supabase-js');
+      console.log("Connecting to Supabase Cloud Database at:", supabaseUrl);
+      supabase = createClient(supabaseUrl, supabaseKey, {
+        auth: { persistSession: false }
+      });
       
-      // Ensure index on id and syncCode for fast lookups
-      await usersCollection.createIndex({ id: 1 }, { unique: true });
-      await usersCollection.createIndex({ syncCode: 1 });
-      
-      isMongo = true;
-      console.log("Connected successfully to Cloud MongoDB Database.");
+      // Test query to check if users table exists and is accessible
+      const { data, error } = await supabase.from('users').select('id').limit(1);
+      if (error) {
+        console.error("Supabase table query error:", error.message);
+        console.warn("⚠️ Make sure you have created the 'users' table in Supabase. Falling back to local database.json.");
+        isSupabase = false;
+      } else {
+        isSupabase = true;
+        console.log("Connected successfully to Supabase Cloud Database.");
+      }
     } catch (err) {
-      console.error("Failed to connect to MongoDB, falling back to local file database:", err);
-      isMongo = false;
+      console.error("Failed to initialize Supabase client, falling back to local file database:", err.message);
+      isSupabase = false;
     }
   } else {
-    console.log("No MONGODB_URI detected. Using local filesystem database.json.");
-    isMongo = false;
+    console.log("No SUPABASE_URL / SUPABASE_KEY detected. Using local filesystem database.json.");
+    isSupabase = false;
   }
+}
+
+// Helpers to map between DB row (snake_case) and App Model (camelCase)
+function mapRowToUser(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    syncCode: row.sync_code || row.syncCode || '',
+    username: row.username || null,
+    passwordHash: row.password_hash || row.passwordHash || null,
+    score: typeof row.score === 'number' ? row.score : 0,
+    streak: typeof row.streak === 'number' ? row.streak : 0,
+    lastCompletedDate: row.last_completed_date || row.lastCompletedDate || null,
+    completedChallenges: row.completed_challenges || row.completedChallenges || [],
+    completionHistory: row.completion_history || row.completionHistory || {},
+    preferredLanguage: row.preferred_language || row.preferredLanguage || 'python',
+    canonicalId: row.canonical_id || row.canonicalId || row.id,
+    createdAt: row.created_at || row.createdAt || new Date().toISOString(),
+    updatedAt: row.updated_at || row.updatedAt || new Date().toISOString()
+  };
+}
+
+function mapUserToRow(user) {
+  return {
+    id: user.id,
+    sync_code: user.syncCode,
+    username: user.username,
+    password_hash: user.passwordHash,
+    score: user.score,
+    streak: user.streak,
+    last_completed_date: user.lastCompletedDate,
+    completed_challenges: user.completedChallenges,
+    completion_history: user.completionHistory,
+    preferred_language: user.preferredLanguage,
+    canonical_id: user.canonicalId,
+    created_at: user.createdAt,
+    updated_at: user.updatedAt
+  };
 }
 
 // Local File Read/Write Helpers
@@ -86,8 +129,8 @@ function resolveCanonicalIdLocal(userId, users) {
   return currentId;
 }
 
-// Resolves canonical user ID asynchronously in MongoDB
-async function resolveCanonicalIdMongo(userId) {
+// Resolves canonical user ID asynchronously in Supabase
+async function resolveCanonicalIdSupabase(userId) {
   let currentId = userId;
   let visited = new Set();
   
@@ -95,9 +138,14 @@ async function resolveCanonicalIdMongo(userId) {
     if (visited.has(currentId)) break;
     visited.add(currentId);
     
-    const user = await usersCollection.findOne({ id: currentId });
-    if (user && user.canonicalId && user.canonicalId !== currentId) {
-      currentId = user.canonicalId;
+    const { data: user } = await supabase
+      .from('users')
+      .select('id, canonical_id')
+      .eq('id', currentId)
+      .maybeSingle();
+      
+    if (user && user.canonical_id && user.canonical_id !== currentId) {
+      currentId = user.canonical_id;
     } else {
       break;
     }
@@ -110,14 +158,14 @@ async function generateSyncCode() {
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
   let code = '';
   
-  if (isMongo) {
+  if (isSupabase) {
     do {
       code = '';
       for (let i = 0; i < 6; i++) {
         code += chars.charAt(Math.floor(Math.random() * chars.length));
       }
-      const existing = await usersCollection.findOne({ syncCode: code });
-      if (!existing) break;
+      const { data } = await supabase.from('users').select('id').eq('sync_code', code).maybeSingle();
+      if (!data) break;
     } while (true);
   } else {
     const data = readData();
@@ -134,7 +182,7 @@ async function generateSyncCode() {
 }
 
 export const db = {
-  // Create a new user profile
+  // Create a new anonymous user profile
   async createUser() {
     const id = Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
     const syncCode = await generateSyncCode();
@@ -151,11 +199,17 @@ export const db = {
       completionHistory: {},
       preferredLanguage: 'python',
       canonicalId: id,
-      createdAt: new Date().toISOString()
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
     };
 
-    if (isMongo) {
-      await usersCollection.insertOne(newUser);
+    if (isSupabase) {
+      const row = mapUserToRow(newUser);
+      const { error } = await supabase.from('users').insert(row);
+      if (error) {
+        console.error("Supabase createUser error:", error);
+        throw new Error("Failed to create user in database");
+      }
       return newUser;
     } else {
       const data = readData();
@@ -167,10 +221,14 @@ export const db = {
 
   // Get user profile (resolving linked profiles)
   async getUser(userId) {
-    if (isMongo) {
-      const canonicalId = await resolveCanonicalIdMongo(userId);
-      const user = await usersCollection.findOne({ id: canonicalId });
-      return user ? { ...user, resolvedId: canonicalId } : null;
+    if (isSupabase) {
+      const canonicalId = await resolveCanonicalIdSupabase(userId);
+      const { data: row } = await supabase
+        .from('users')
+        .select('*')
+        .eq('id', canonicalId)
+        .maybeSingle();
+      return row ? { ...mapRowToUser(row), resolvedId: canonicalId } : null;
     } else {
       const data = readData();
       const canonicalId = resolveCanonicalIdLocal(userId, data.users);
@@ -181,45 +239,50 @@ export const db = {
 
   // Update user's progress statistics
   async updateProgress(userId, progress) {
-    if (isMongo) {
-      const canonicalId = await resolveCanonicalIdMongo(userId);
-      const user = await usersCollection.findOne({ id: canonicalId });
-      if (!user) return null;
+    if (isSupabase) {
+      const canonicalId = await resolveCanonicalIdSupabase(userId);
+      const { data: row } = await supabase
+        .from('users')
+        .select('*')
+        .eq('id', canonicalId)
+        .maybeSingle();
+      if (!row) return null;
 
-      // Merge arrays
+      const user = mapRowToUser(row);
+
+      // Merge completed list
       const existingCompleted = new Set(user.completedChallenges || []);
       if (Array.isArray(progress.completedChallenges)) {
         progress.completedChallenges.forEach(c => existingCompleted.add(c));
       }
       const mergedCompleted = Array.from(existingCompleted).sort();
       
-      // Calculate updates
-      const updatedFields = {
-        completedChallenges: mergedCompleted,
-        updatedAt: new Date().toISOString()
+      const updatePayload = {
+        completed_challenges: mergedCompleted,
+        updated_at: new Date().toISOString()
       };
       
       if (typeof progress.score === 'number') {
-        updatedFields.score = Math.max(user.score || 0, progress.score);
+        updatePayload.score = Math.max(user.score || 0, progress.score);
       }
       if (typeof progress.streak === 'number') {
-        updatedFields.streak = Math.max(user.streak || 0, progress.streak);
+        updatePayload.streak = Math.max(user.streak || 0, progress.streak);
       }
       if (progress.lastCompletedDate) {
         if (!user.lastCompletedDate || progress.lastCompletedDate > user.lastCompletedDate) {
-          updatedFields.lastCompletedDate = progress.lastCompletedDate;
+          updatePayload.last_completed_date = progress.lastCompletedDate;
         }
       }
       if (progress.completionHistory) {
-        updatedFields.completionHistory = {
+        updatePayload.completion_history = {
           ...(user.completionHistory || {}),
           ...progress.completionHistory
         };
       }
 
-      await usersCollection.updateOne({ id: canonicalId }, { $set: updatedFields });
-      const updatedUser = await usersCollection.findOne({ id: canonicalId });
-      return { ...updatedUser, resolvedId: canonicalId };
+      await supabase.from('users').update(updatePayload).eq('id', canonicalId);
+      const { data: updatedRow } = await supabase.from('users').select('*').eq('id', canonicalId).maybeSingle();
+      return { ...mapRowToUser(updatedRow), resolvedId: canonicalId };
 
     } else {
       const data = readData();
@@ -262,26 +325,33 @@ export const db = {
   async linkProfiles(currentUserId, targetSyncCode) {
     const codeKey = targetSyncCode.trim().toUpperCase();
 
-    if (isMongo) {
-      const currentCanonicalId = await resolveCanonicalIdMongo(currentUserId);
-      const targetUser = await usersCollection.findOne({ syncCode: codeKey });
-      if (!targetUser) {
+    if (isSupabase) {
+      const currentCanonicalId = await resolveCanonicalIdSupabase(currentUserId);
+      const { data: targetRow } = await supabase
+        .from('users')
+        .select('*')
+        .eq('sync_code', codeKey)
+        .maybeSingle();
+
+      if (!targetRow) {
         throw new Error("Invalid sync code");
       }
 
-      const targetCanonicalId = await resolveCanonicalIdMongo(targetUser.id);
+      const targetCanonicalId = await resolveCanonicalIdSupabase(targetRow.id);
       if (currentCanonicalId === targetCanonicalId) {
-        const user = await usersCollection.findOne({ id: currentCanonicalId });
-        return { ...user, canonicalId: currentCanonicalId };
+        const { data: userRow } = await supabase.from('users').select('*').eq('id', currentCanonicalId).maybeSingle();
+        return { ...mapRowToUser(userRow), canonicalId: currentCanonicalId };
       }
 
-      const primary = await usersCollection.findOne({ id: targetCanonicalId });
-      const secondary = await usersCollection.findOne({ id: currentCanonicalId });
-      if (!secondary) {
+      const { data: primaryRow } = await supabase.from('users').select('*').eq('id', targetCanonicalId).maybeSingle();
+      const { data: secondaryRow } = await supabase.from('users').select('*').eq('id', currentCanonicalId).maybeSingle();
+      if (!secondaryRow) {
         throw new Error("Active device profile session not found on server. Please restart/reload app.");
       }
 
-      // Merge progress
+      const primary = mapRowToUser(primaryRow);
+      const secondary = mapRowToUser(secondaryRow);
+
       const mergedCompleted = Array.from(new Set([
         ...(primary.completedChallenges || []),
         ...(secondary.completedChallenges || [])
@@ -298,45 +368,30 @@ export const db = {
         ? (primary.lastCompletedDate > secondary.lastCompletedDate ? primary.lastCompletedDate : secondary.lastCompletedDate)
         : (primary.lastCompletedDate || secondary.lastCompletedDate);
 
-      // Update primary document
-      await usersCollection.updateOne(
-        { id: targetCanonicalId },
-        {
-          $set: {
-            completedChallenges: mergedCompleted,
-            completionHistory: mergedHistory,
-            score: mergedScore,
-            streak: mergedStreak,
-            lastCompletedDate: mergedLastCompleted,
-            updatedAt: new Date().toISOString()
-          }
-        }
-      );
+      // Update primary
+      await supabase.from('users').update({
+        completed_challenges: mergedCompleted,
+        completion_history: mergedHistory,
+        score: mergedScore,
+        streak: mergedStreak,
+        last_completed_date: mergedLastCompleted,
+        updated_at: new Date().toISOString()
+      }).eq('id', targetCanonicalId);
 
-      // Update secondary canonical mapping pointing to primary canonical
-      await usersCollection.updateOne(
-        { id: currentCanonicalId },
-        {
-          $set: {
-            canonicalId: targetCanonicalId,
-            updatedAt: new Date().toISOString()
-          }
-        }
-      );
+      // Update secondary to point to targetCanonicalId
+      await supabase.from('users').update({
+        canonical_id: targetCanonicalId,
+        updated_at: new Date().toISOString()
+      }).eq('id', currentCanonicalId);
 
-      // Cascade any profiles pointing to currentCanonicalId to targetCanonicalId
-      await usersCollection.updateMany(
-        { canonicalId: currentCanonicalId },
-        {
-          $set: {
-            canonicalId: targetCanonicalId,
-            updatedAt: new Date().toISOString()
-          }
-        }
-      );
+      // Cascade any profiles pointing to currentCanonicalId
+      await supabase.from('users').update({
+        canonical_id: targetCanonicalId,
+        updated_at: new Date().toISOString()
+      }).eq('canonical_id', currentCanonicalId);
 
-      const finalUser = await usersCollection.findOne({ id: targetCanonicalId });
-      return { ...finalUser, canonicalId: targetCanonicalId };
+      const { data: finalRow } = await supabase.from('users').select('*').eq('id', targetCanonicalId).maybeSingle();
+      return { ...mapRowToUser(finalRow), canonicalId: targetCanonicalId };
 
     } else {
       const data = readData();
@@ -399,21 +454,27 @@ export const db = {
   async registerAccount(userId, username, password) {
     const lowerUsername = username.trim().toLowerCase();
 
-    if (isMongo) {
-      const exists = await usersCollection.findOne({ 
-        username: { $regex: new RegExp(`^${lowerUsername}$`, 'i') } 
-      });
-      if (exists) {
+    if (isSupabase) {
+      // Check username uniqueness (case-insensitive)
+      const { data: existing } = await supabase
+        .from('users')
+        .select('id')
+        .ilike('username', lowerUsername)
+        .maybeSingle();
+
+      if (existing) {
         throw new Error("Username already taken");
       }
 
-      const canonicalId = userId ? await resolveCanonicalIdMongo(userId) : null;
-      let user = canonicalId ? await usersCollection.findOne({ id: canonicalId }) : null;
+      const canonicalId = userId ? await resolveCanonicalIdSupabase(userId) : null;
+      let { data: userRow } = canonicalId 
+        ? await supabase.from('users').select('*').eq('id', canonicalId).maybeSingle() 
+        : { data: null };
 
-      if (!user) {
+      if (!userRow) {
         const newId = Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
         const syncCode = await generateSyncCode();
-        user = {
+        const newUser = {
           id: newId,
           syncCode,
           username: username.trim(),
@@ -425,24 +486,21 @@ export const db = {
           completionHistory: {},
           preferredLanguage: 'python',
           canonicalId: newId,
-          createdAt: new Date().toISOString()
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
         };
-        await usersCollection.insertOne(user);
+        await supabase.from('users').insert(mapUserToRow(newUser));
+        return { ...newUser, canonicalId: newId };
       } else {
-        await usersCollection.updateOne(
-          { id: canonicalId },
-          {
-            $set: {
-              username: username.trim(),
-              passwordHash: hashPassword(password),
-              updatedAt: new Date().toISOString()
-            }
-          }
-        );
-        user = await usersCollection.findOne({ id: canonicalId });
-      }
+        await supabase.from('users').update({
+          username: username.trim(),
+          password_hash: hashPassword(password),
+          updated_at: new Date().toISOString()
+        }).eq('id', canonicalId);
 
-      return { ...user, canonicalId: user.canonicalId };
+        const { data: updated } = await supabase.from('users').select('*').eq('id', canonicalId).maybeSingle();
+        return { ...mapRowToUser(updated), canonicalId };
+      }
 
     } else {
       const data = readData();
@@ -490,17 +548,20 @@ export const db = {
     const lowerUsername = username.trim().toLowerCase();
     const hash = hashPassword(password);
 
-    if (isMongo) {
-      const user = await usersCollection.findOne({
-        username: { $regex: new RegExp(`^${lowerUsername}$`, 'i') }
-      });
-      if (!user || user.passwordHash !== hash) {
+    if (isSupabase) {
+      const { data: userRow } = await supabase
+        .from('users')
+        .select('*')
+        .ilike('username', lowerUsername)
+        .maybeSingle();
+
+      if (!userRow || userRow.password_hash !== hash) {
         throw new Error("Invalid username or password");
       }
 
-      const canonicalId = await resolveCanonicalIdMongo(user.id);
-      const canonicalUser = await usersCollection.findOne({ id: canonicalId });
-      return { ...canonicalUser, resolvedId: canonicalId };
+      const canonicalId = await resolveCanonicalIdSupabase(userRow.id);
+      const { data: canonicalRow } = await supabase.from('users').select('*').eq('id', canonicalId).maybeSingle();
+      return { ...mapRowToUser(canonicalRow), resolvedId: canonicalId };
 
     } else {
       const data = readData();
@@ -522,22 +583,18 @@ export const db = {
 
   // Update preferred language
   async updateLanguage(userId, language) {
-    if (isMongo) {
-      const canonicalId = await resolveCanonicalIdMongo(userId);
-      const user = await usersCollection.findOne({ id: canonicalId });
-      if (!user) return null;
+    if (isSupabase) {
+      const canonicalId = await resolveCanonicalIdSupabase(userId);
+      const { data: row } = await supabase.from('users').select('id').eq('id', canonicalId).maybeSingle();
+      if (!row) return null;
 
-      await usersCollection.updateOne(
-        { id: canonicalId },
-        {
-          $set: {
-            preferredLanguage: language,
-            updatedAt: new Date().toISOString()
-          }
-        }
-      );
-      const updatedUser = await usersCollection.findOne({ id: canonicalId });
-      return { ...updatedUser, resolvedId: canonicalId };
+      await supabase.from('users').update({
+        preferred_language: language,
+        updated_at: new Date().toISOString()
+      }).eq('id', canonicalId);
+
+      const { data: updated } = await supabase.from('users').select('*').eq('id', canonicalId).maybeSingle();
+      return { ...mapRowToUser(updated), resolvedId: canonicalId };
 
     } else {
       const data = readData();
@@ -555,13 +612,14 @@ export const db = {
 
   // Get high score leaderboard
   async getLeaderboard() {
-    if (isMongo) {
-      const list = await usersCollection
-        .find({ score: { $gt: 0 } })
-        .sort({ score: -1 })
-        .limit(10)
-        .toArray();
-      return list;
+    if (isSupabase) {
+      const { data: rows } = await supabase
+        .from('users')
+        .select('*')
+        .gt('score', 0)
+        .order('score', { ascending: false })
+        .limit(10);
+      return (rows || []).map(mapRowToUser);
     } else {
       const data = readData();
       const list = Object.values(data.users)

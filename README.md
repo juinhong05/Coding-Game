@@ -65,10 +65,32 @@ npm run dev
 * Link your GitHub repository to a new Render **Web Service**.
 * Set **Root Directory** to `backend`.
 * Start command: `node server.js`.
-* Configure the following Environment Variable for database persistence:
-  - **Key**: `MONGODB_URI`
-  - **Value**: `mongodb+srv://<username>:<password>@cluster0.mongodb.net/synapse?retryWrites=true&w=majority` *(Create a free M0 Shared Cluster on MongoDB Atlas to get your URI)*
-* *Note: If MONGODB_URI is not set, the server will gracefully fallback to using local file database.json storage.*
+* Configure the following Environment Variables in Render for Supabase database persistence:
+  - **Key**: `SUPABASE_URL` | **Value**: `https://your-project-id.supabase.co`
+  - **Key**: `SUPABASE_KEY` | **Value**: `your-supabase-service-role-or-anon-key`
+* *Note: If Supabase variables are not set, the server will gracefully fallback to local file `database.json` storage.*
+
+#### Supabase Database Table Setup (Run in Supabase SQL Editor):
+```sql
+create table if not exists users (
+  id text primary key,
+  sync_code text not null,
+  username text,
+  password_hash text,
+  score integer default 0,
+  streak integer default 0,
+  last_completed_date text,
+  completed_challenges jsonb default '[]'::jsonb,
+  completion_history jsonb default '{}'::jsonb,
+  preferred_language text default 'python',
+  canonical_id text,
+  created_at text default (now() at time zone 'utc')::text,
+  updated_at text default (now() at time zone 'utc')::text
+);
+
+create index if not exists idx_users_sync_code on users(sync_code);
+create index if not exists idx_users_canonical_id on users(canonical_id);
+```
 
 ### Frontend Deployment (e.g. Vercel)
 * Link the repository to a new Vercel project.
