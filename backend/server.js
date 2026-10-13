@@ -1,7 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import { db, initDb } from './db.js';
-import { CHALLENGE_BANK, getChallengeForDate } from './challenges.js';
+import { CHALLENGE_BANK, getChallengeForDate, MINI_GAME_BANK } from './challenges.js';
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -19,6 +19,23 @@ app.use((req, res, next) => {
 function getNickname(user) {
   if (user.username) return user.username;
   return user.nickname || `Coder_${user.syncCode}`;
+}
+
+// Helper to build the public user profile payload
+function userPayload(user) {
+  return {
+    id: user.resolvedId || user.canonicalId || user.id,
+    syncCode: user.syncCode,
+    username: user.username,
+    nickname: getNickname(user),
+    score: user.score,
+    streak: user.streak,
+    preferredLanguage: user.preferredLanguage,
+    lastCompletedDate: user.lastCompletedDate,
+    completedChallenges: user.completedChallenges,
+    completionHistory: user.completionHistory,
+    miniGamesCompleted: user.miniGamesCompleted
+  };
 }
 
 // Root status page
@@ -86,36 +103,36 @@ app.get('/', (req, res) => {
 // 1. Get Daily / Progressive Challenge
 app.get('/api/challenges/daily', async (req, res) => {
   const { userId } = req.query;
-  
+
   try {
     let challenge;
-    let index = 0;
     let language = req.query.language || 'python';
-    
+
     if (userId) {
       const user = await db.getUser(userId);
       if (user) {
-        // Resolve active language if not explicitly set in query
+        // Resolve active language
         if (!req.query.language && user.preferredLanguage) {
           language = user.preferredLanguage;
         }
-        
-        // Progressive Level Index is determined by completion count
+
+        // Level index is per-language: Python progress doesn't affect C++ level
         const bank = CHALLENGE_BANK[language] || CHALLENGE_BANK.python;
-        index = user.completedChallenges.length % bank.length;
-        challenge = { 
+        const langCompleted = user.completedChallenges?.[language] || [];
+        const index = langCompleted.length % bank.length;
+        challenge = {
           ...bank[index],
-          assignedDate: new Date().toISOString().split('T')[0] // current date label
+          assignedDate: new Date().toISOString().split('T')[0]
         };
       }
     }
-    
+
     // Fallback to Date Hash if userId is missing or invalid
     if (!challenge) {
       const dateStr = req.query.date || new Date().toISOString().split('T')[0];
       challenge = getChallengeForDate(dateStr, language);
     }
-    
+
     // Strip answers from the payload
     const cleanChallenge = { ...challenge };
     if (cleanChallenge.type === 'bug_hunt') {
@@ -124,12 +141,13 @@ app.get('/api/challenges/daily', async (req, res) => {
     } else if (cleanChallenge.type === 'multiple_choice') {
       delete cleanChallenge.correctOptionIndex;
     }
-    
+
     res.json(cleanChallenge);
   } catch (err) {
     res.status(500).json({ error: "Failed to retrieve challenge" });
   }
 });
+
 
 // 2. Validate Challenge Solution
 app.post('/api/challenges/verify', (req, res) => {
@@ -171,18 +189,7 @@ app.post('/api/challenges/verify', (req, res) => {
 app.post('/api/user/register', async (req, res) => {
   try {
     const newUser = await db.createUser();
-    res.status(201).json({
-      id: newUser.id,
-      syncCode: newUser.syncCode,
-      username: newUser.username,
-      nickname: getNickname(newUser),
-      score: newUser.score,
-      streak: newUser.streak,
-      preferredLanguage: newUser.preferredLanguage,
-      lastCompletedDate: newUser.lastCompletedDate,
-      completedChallenges: newUser.completedChallenges,
-      completionHistory: newUser.completionHistory
-    });
+    res.status(201).json(userPayload(newUser));
   } catch (err) {
     res.status(500).json({ error: "Failed to register user" });
   }
@@ -194,21 +201,9 @@ app.post('/api/user/register-account', async (req, res) => {
   if (!username || !password) {
     return res.status(400).json({ error: "Username and password are required" });
   }
-
   try {
     const user = await db.registerAccount(userId, username, password);
-    res.status(200).json({
-      id: user.canonicalId,
-      syncCode: user.syncCode,
-      username: user.username,
-      nickname: getNickname(user),
-      score: user.score,
-      streak: user.streak,
-      preferredLanguage: user.preferredLanguage,
-      lastCompletedDate: user.lastCompletedDate,
-      completedChallenges: user.completedChallenges,
-      completionHistory: user.completionHistory
-    });
+    res.status(200).json(userPayload(user));
   } catch (err) {
     res.status(400).json({ error: err.message || "Registration failed" });
   }
@@ -220,21 +215,9 @@ app.post('/api/user/login', async (req, res) => {
   if (!username || !password) {
     return res.status(400).json({ error: "Username and password are required" });
   }
-
   try {
     const user = await db.login(username, password);
-    res.status(200).json({
-      id: user.resolvedId,
-      syncCode: user.syncCode,
-      username: user.username,
-      nickname: getNickname(user),
-      score: user.score,
-      streak: user.streak,
-      preferredLanguage: user.preferredLanguage,
-      lastCompletedDate: user.lastCompletedDate,
-      completedChallenges: user.completedChallenges,
-      completionHistory: user.completionHistory
-    });
+    res.status(200).json(userPayload(user));
   } catch (err) {
     res.status(401).json({ error: err.message || "Invalid credentials" });
   }
@@ -246,25 +229,10 @@ app.post('/api/user/:id/language', async (req, res) => {
   if (!language || (language !== 'python' && language !== 'cpp')) {
     return res.status(400).json({ error: "Language must be 'python' or 'cpp'" });
   }
-
   try {
     const updated = await db.updateLanguage(req.params.id, language);
-    if (!updated) {
-      return res.status(404).json({ error: "User not found" });
-    }
-
-    res.json({
-      id: updated.resolvedId,
-      syncCode: updated.syncCode,
-      username: updated.username,
-      nickname: getNickname(updated),
-      score: updated.score,
-      streak: updated.streak,
-      preferredLanguage: updated.preferredLanguage,
-      lastCompletedDate: updated.lastCompletedDate,
-      completedChallenges: updated.completedChallenges,
-      completionHistory: updated.completionHistory
-    });
+    if (!updated) return res.status(404).json({ error: "User not found" });
+    res.json(userPayload(updated));
   } catch (err) {
     res.status(500).json({ error: "Failed to update language" });
   }
@@ -274,21 +242,8 @@ app.post('/api/user/:id/language', async (req, res) => {
 app.get('/api/user/:id', async (req, res) => {
   try {
     const user = await db.getUser(req.params.id);
-    if (!user) {
-      return res.status(404).json({ error: "User not found" });
-    }
-    res.json({
-      id: user.resolvedId,
-      syncCode: user.syncCode,
-      username: user.username,
-      nickname: getNickname(user),
-      score: user.score,
-      streak: user.streak,
-      preferredLanguage: user.preferredLanguage,
-      lastCompletedDate: user.lastCompletedDate,
-      completedChallenges: user.completedChallenges,
-      completionHistory: user.completionHistory
-    });
+    if (!user) return res.status(404).json({ error: "User not found" });
+    res.json(userPayload(user));
   } catch (err) {
     res.status(500).json({ error: "Failed to get user profile" });
   }
@@ -296,32 +251,13 @@ app.get('/api/user/:id', async (req, res) => {
 
 // 8. Update Progress / Sync State
 app.post('/api/user/:id/progress', async (req, res) => {
-  const { score, streak, lastCompletedDate, completedChallenges, completionHistory } = req.body;
+  const { score, streak, lastCompletedDate, completedChallenges, completionHistory, miniGamesCompleted } = req.body;
   try {
     const updated = await db.updateProgress(req.params.id, {
-      score,
-      streak,
-      lastCompletedDate,
-      completedChallenges,
-      completionHistory
+      score, streak, lastCompletedDate, completedChallenges, completionHistory, miniGamesCompleted
     });
-
-    if (!updated) {
-      return res.status(404).json({ error: "User not found" });
-    }
-
-    res.json({
-      id: updated.resolvedId,
-      syncCode: updated.syncCode,
-      username: updated.username,
-      nickname: getNickname(updated),
-      score: updated.score,
-      streak: updated.streak,
-      preferredLanguage: updated.preferredLanguage,
-      lastCompletedDate: updated.lastCompletedDate,
-      completedChallenges: updated.completedChallenges,
-      completionHistory: updated.completionHistory
-    });
+    if (!updated) return res.status(404).json({ error: "User not found" });
+    res.json(userPayload(updated));
   } catch (err) {
     res.status(500).json({ error: "Failed to update user progress" });
   }
@@ -330,24 +266,10 @@ app.post('/api/user/:id/progress', async (req, res) => {
 // 9. Link Devices / Profiles
 app.post('/api/user/:id/sync/link', async (req, res) => {
   const { syncCode } = req.body;
-  if (!syncCode) {
-    return res.status(400).json({ error: "Sync code is required" });
-  }
-
+  if (!syncCode) return res.status(400).json({ error: "Sync code is required" });
   try {
     const merged = await db.linkProfiles(req.params.id, syncCode);
-    res.json({
-      id: merged.canonicalId,
-      syncCode: merged.syncCode,
-      username: merged.username,
-      nickname: getNickname(merged),
-      score: merged.score,
-      streak: merged.streak,
-      preferredLanguage: merged.preferredLanguage,
-      lastCompletedDate: merged.lastCompletedDate,
-      completedChallenges: merged.completedChallenges,
-      completionHistory: merged.completionHistory
-    });
+    res.json(userPayload(merged));
   } catch (err) {
     res.status(400).json({ error: err.message || "Failed to link profiles" });
   }
@@ -366,6 +288,92 @@ app.get('/api/leaderboard', async (req, res) => {
     res.json(leaderboard);
   } catch (err) {
     res.status(500).json({ error: "Failed to get leaderboard" });
+  }
+});
+
+// 11. Get Available Mini-Games for a User (filtered by unlock level per language)
+app.get('/api/minigames', async (req, res) => {
+  const { userId, language } = req.query;
+  const lang = language || 'python';
+  const bank = MINI_GAME_BANK[lang] || [];
+
+  try {
+    let completedLevel = 0;
+    let completedMiniGameIds = [];
+
+    if (userId) {
+      const user = await db.getUser(userId);
+      if (user) {
+        completedLevel = (user.completedChallenges?.[lang] || []).length;
+        completedMiniGameIds = user.miniGamesCompleted?.[lang] || [];
+      }
+    }
+
+    // Filter to unlocked games only, strip answers
+    const available = bank
+      .filter(game => completedLevel >= game.unlockLevel)
+      .map(game => {
+        const clean = { ...game };
+        delete clean.bugLineIndex;
+        delete clean.correctOptionIndex;
+        delete clean.explanation;
+        clean.completed = completedMiniGameIds.includes(game.id);
+        return clean;
+      });
+
+    res.json({
+      language: lang,
+      unlockedCount: available.length,
+      totalCount: bank.length,
+      games: available
+    });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to retrieve mini-games" });
+  }
+});
+
+// 12. Verify Mini-Game Solution
+app.post('/api/minigames/verify', async (req, res) => {
+  const { gameId, submission, userId, language } = req.body;
+  const lang = language || 'python';
+  const bank = MINI_GAME_BANK[lang] || [];
+
+  const game = bank.find(g => g.id === gameId);
+  if (!game) {
+    return res.status(404).json({ error: "Mini-game not found" });
+  }
+
+  try {
+    let success = false;
+    let explanation = game.explanation || "";
+
+    if (game.type === 'mini_bug_hunt') {
+      success = parseInt(submission) === game.bugLineIndex;
+    } else if (['mini_output_predict', 'mini_fill_in', 'mini_refactor'].includes(game.type)) {
+      success = parseInt(submission) === game.correctOptionIndex;
+    }
+
+    // If correct and userId provided, record completion
+    if (success && userId) {
+      const user = await db.getUser(userId);
+      if (user) {
+        const existingMiniGames = user.miniGamesCompleted || { python: [], cpp: [] };
+        const langList = new Set(existingMiniGames[lang] || []);
+        langList.add(gameId);
+        await db.updateProgress(userId, {
+          miniGamesCompleted: {
+            ...existingMiniGames,
+            [lang]: Array.from(langList).sort()
+          },
+          // Award 10 bonus points per mini-game completion
+          score: (user.score || 0) + 10
+        });
+      }
+    }
+
+    res.json({ success, explanation });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to verify mini-game solution" });
   }
 });
 

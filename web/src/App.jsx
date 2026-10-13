@@ -5,13 +5,15 @@ const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:5000/api';
 
 function App() {
   // Navigation & Screen States
-  const [activeTab, setActiveTab] = useState('dashboard'); // 'dashboard' | 'leaderboard' | 'account'
+  const [activeTab, setActiveTab] = useState('dashboard'); // 'dashboard' | 'minigames' | 'leaderboard' | 'account'
   const [isPlaying, setIsPlaying] = useState(false);
+  const [playingMiniGame, setPlayingMiniGame] = useState(null); // Active mini-game object
   
   // User & Challenge Data
   const [user, setUser] = useState(null);
   const [challenge, setChallenge] = useState(null);
   const [leaderboard, setLeaderboard] = useState([]);
+  const [miniGamesList, setMiniGamesList] = useState([]);
   
   // Arena State
   const [timer, setTimer] = useState(600); // 10 minutes
@@ -132,14 +134,98 @@ function App() {
     return copy;
   };
 
+  const fetchMiniGames = async (userId, lang) => {
+    try {
+      const activeLang = lang || (user ? user.preferredLanguage : 'python');
+      const url = userId ? `${API_BASE}/minigames?userId=${userId}&language=${activeLang}` : `${API_BASE}/minigames?language=${activeLang}`;
+      const res = await fetch(url);
+      const data = await res.json();
+      setMiniGamesList(data.games || []);
+    } catch (err) {
+      console.error("Failed to load mini-games:", err);
+    }
+  };
+
+  // Start a Mini-Game
+  const startMiniGame = (mg) => {
+    setPlayingMiniGame(mg);
+    setTimer(180); // 3 minutes for quick mini-game
+    setHasSubmitted(false);
+    setIsSuccess(false);
+    setExplanationText('');
+    setSelectedChoiceIndex(null);
+    setSelectedBugIndex(null);
+    setIsPlaying(true);
+  };
+
+  // Submit Mini-Game Solution
+  const submitMiniGameSolution = async () => {
+    if (hasSubmitted || !playingMiniGame) return;
+
+    let submission = null;
+    if (playingMiniGame.type === 'mini_bug_hunt') {
+      if (selectedBugIndex === null) {
+        alert("Please select the buggy line first.");
+        return;
+      }
+      submission = selectedBugIndex;
+    } else {
+      if (selectedChoiceIndex === null) {
+        alert("Please select an option first.");
+        return;
+      }
+      submission = selectedChoiceIndex;
+    }
+
+    try {
+      const res = await fetch(`${API_BASE}/minigames/verify`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          gameId: playingMiniGame.id,
+          submission,
+          userId: user.id,
+          language: user.preferredLanguage || 'python'
+        })
+      });
+      const data = await res.json();
+      setHasSubmitted(true);
+      setExplanationText(data.explanation || '');
+
+      if (data.success) {
+        setIsSuccess(true);
+        // Refresh user profile and mini-games list
+        const refreshed = await fetch(`${API_BASE}/user/${user.id}`).then(r => r.json());
+        setUser(refreshed);
+        fetchMiniGames(user.id, user.preferredLanguage);
+        setScoreBreakdown({
+          base: 10,
+          timeBonus: 0,
+          streakBonus: 0,
+          total: 10
+        });
+        setShowModal(true);
+      } else {
+        setIsSuccess(false);
+        alert("Incorrect answer. Check the explanation and try again!");
+        setHasSubmitted(false);
+      }
+    } catch (err) {
+      console.error("Mini-game verification error:", err);
+    }
+  };
+
   // Start daily challenge
   const startChallenge = () => {
     if (!challenge) return;
+    setPlayingMiniGame(null);
     
     // Check if already completed today's progress level
-    // Wait, since we are progressive, completed challenges count determines active level,
-    // so we check if challenge.id is already in completed list.
-    if (user.completedChallenges.includes(challenge.id)) {
+    const lang = user.preferredLanguage || 'python';
+    const langCompleted = Array.isArray(user.completedChallenges) 
+      ? user.completedChallenges 
+      : (user.completedChallenges?.[lang] || []);
+    if (langCompleted.includes(challenge.id)) {
       alert("You have already completed this curriculum level!");
       return;
     }
@@ -302,11 +388,24 @@ function App() {
       const todayStr = new Date().toISOString().split('T')[0];
       const newStreak = calculateNewStreak(user.lastCompletedDate, todayStr, user.streak);
 
+      const lang = user.preferredLanguage || 'python';
+      const existingLangCompleted = Array.isArray(user.completedChallenges)
+        ? (lang === 'python' ? user.completedChallenges : [])
+        : (user.completedChallenges?.[lang] || []);
+      const updatedLangCompleted = Array.from(new Set([...existingLangCompleted, challenge.id])).sort();
+      
+      const currentCompletedMap = Array.isArray(user.completedChallenges)
+        ? { python: user.completedChallenges, cpp: [] }
+        : { ...(user.completedChallenges || { python: [], cpp: [] }) };
+
       const progressUpdate = {
         score: newScore,
         streak: newStreak,
         lastCompletedDate: todayStr,
-        completedChallenges: [...user.completedChallenges, challenge.id],
+        completedChallenges: {
+          ...currentCompletedMap,
+          [lang]: updatedLangCompleted
+        },
         completionHistory: {
           ...user.completionHistory,
           [challenge.id]: {
@@ -545,8 +644,12 @@ function App() {
     );
   }
 
-  const currentLevelIndex = user.completedChallenges.length + 1;
-  const isCurriculumCompleted = user.completedChallenges.includes(challenge.id);
+  const activeLang = user.preferredLanguage || 'python';
+  const activeCompletedList = Array.isArray(user.completedChallenges)
+    ? (activeLang === 'python' ? user.completedChallenges : [])
+    : (user.completedChallenges?.[activeLang] || []);
+  const currentLevelIndex = activeCompletedList.length + 1;
+  const isCurriculumCompleted = activeCompletedList.includes(challenge.id);
 
   return (
     <>
@@ -579,6 +682,16 @@ function App() {
                 onClick={() => { setActiveTab('dashboard'); setIsPlaying(false); }}
               >
                 🎮 ARENA
+              </button>
+              <button 
+                className={`tab-btn ${activeTab === 'minigames' ? 'active' : ''}`} 
+                onClick={() => { 
+                  setActiveTab('minigames'); 
+                  setIsPlaying(false);
+                  fetchMiniGames(user.id, user.preferredLanguage);
+                }}
+              >
+                🕹️ MINI GAMES
               </button>
               <button 
                 className={`tab-btn ${activeTab === 'leaderboard' ? 'active' : ''}`} 
@@ -666,6 +779,80 @@ function App() {
                     </div>
                   </div>
                 </div>
+              </div>
+            )}
+
+            {/* Mini Games View */}
+            {activeTab === 'minigames' && (
+              <div style={{ marginBottom: '40px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                  <h2 className="section-title" style={{ margin: 0 }}>🕹️ KNOWLEDGE MINI GAMES</h2>
+                  <div className="language-selector-container" style={{ width: 'auto', margin: 0 }}>
+                    <button 
+                      className={`lang-btn ${user.preferredLanguage === 'python' ? 'active' : ''}`}
+                      onClick={() => {
+                        updateLanguage('python');
+                        fetchMiniGames(user.id, 'python');
+                      }}
+                      style={{ padding: '8px 16px', fontSize: '12px' }}
+                    >
+                      🐍 Python
+                    </button>
+                    <button 
+                      className={`lang-btn ${user.preferredLanguage === 'cpp' ? 'active' : ''}`}
+                      onClick={() => {
+                        updateLanguage('cpp');
+                        fetchMiniGames(user.id, 'cpp');
+                      }}
+                      style={{ padding: '8px 16px', fontSize: '12px' }}
+                    >
+                      ⚙️ C++
+                    </button>
+                  </div>
+                </div>
+                <p style={{ color: 'var(--text-secondary)', fontSize: '14px', marginBottom: '20px' }}>
+                  Special mini challenges unlocked as you master programming topics in your curriculum! Each cleared mini game awards +10 PTS.
+                </p>
+
+                {miniGamesList.length === 0 ? (
+                  <div className="glass-card" style={{ textAlign: 'center', padding: '48px 24px' }}>
+                    <div style={{ fontSize: '48px', marginBottom: '16px' }}>🔒</div>
+                    <h3 style={{ fontSize: '20px', color: 'var(--text-primary)', marginBottom: '8px' }}>Mini Games Locked</h3>
+                    <p style={{ color: 'var(--text-secondary)', maxWidth: '440px', margin: '0 auto', fontSize: '14px' }}>
+                      Reach <strong>Level 10</strong> in {user.preferredLanguage === 'cpp' ? 'C++' : 'Python'} to unlock your first Bug Hunt mini game challenge! Keep completing daily levels to level up.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="minigames-grid">
+                    {miniGamesList.map((mg) => {
+                      const typeLabel = mg.type.replace('mini_', '').replace('_', ' ');
+                      return (
+                        <div key={mg.id} className={`minigame-card ${mg.completed ? 'completed' : ''}`}>
+                          <div>
+                            <div className="minigame-header">
+                              <span className="minigame-type-badge">{typeLabel}</span>
+                              <span className={`minigame-status-pill ${mg.completed ? 'cleared' : 'unlocked'}`}>
+                                {mg.completed ? '✓ CLEARED' : '⚡ READY'}
+                              </span>
+                            </div>
+                            <h3>{mg.title}</h3>
+                            <p>{mg.description}</p>
+                          </div>
+                          <div className="minigame-card-footer">
+                            <span className="minigame-unlock-hint">LEVEL {mg.unlockLevel}+ TOPIC</span>
+                            <button
+                              className="btn-neon btn-cyan"
+                              style={{ padding: '8px 16px', fontSize: '12px' }}
+                              onClick={() => startMiniGame(mg)}
+                            >
+                              {mg.completed ? 'PLAY AGAIN' : 'PLAY NOW'}
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             )}
 
@@ -854,12 +1041,16 @@ function App() {
             )}
           </>
         ) : (
-          /* Arena (Play Mode) */
+          /* Arena (Play Mode: Daily Challenge OR Mini Game) */
           <div style={{ flexGrow: 1, display: 'flex', flexDirection: 'column', marginTop: '20px' }}>
             <div className="arena-header">
               <div className="arena-title-area">
-                <span className={`challenge-badge badge-${challenge.type}`}>{challenge.type.replace('_', ' ')}</span>
-                <h2 style={{ fontSize: '22px', margin: 0 }}>{challenge.title}</h2>
+                <span className={`challenge-badge badge-${playingMiniGame ? 'parsons' : challenge.type}`}>
+                  {playingMiniGame ? 'MINI GAME' : challenge.type.replace('_', ' ')}
+                </span>
+                <h2 style={{ fontSize: '22px', margin: 0 }}>
+                  {playingMiniGame ? playingMiniGame.title : challenge.title}
+                </h2>
               </div>
               <div className={`arena-timer ${timer < 60 ? 'warning' : ''}`}>
                 <span>⏱</span>
@@ -871,10 +1062,10 @@ function App() {
               <div className="glass-card problem-details">
                 <h3 className="small-stat-lbl">MISSION BRIEFING</h3>
                 <div className="problem-desc-md">
-                  {challenge.description}
+                  {playingMiniGame ? playingMiniGame.description : challenge.description}
                 </div>
                 
-                {challenge.type === 'coding' && testResults.length > 0 && (
+                {!playingMiniGame && challenge.type === 'coding' && testResults.length > 0 && (
                   <div className="glass-card test-results-card">
                     <h4 className="small-stat-lbl">VALIDATION RUN LOG</h4>
                     <div className="test-results-grid">
@@ -898,102 +1089,167 @@ function App() {
               <div className="glass-card workspace-card">
                 <div className="workspace-header">
                   <span>WORKSPACE CONSOLE</span>
-                  <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>JS COMPATIBLE</span>
+                  <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                    {playingMiniGame ? 'MINI CHALLENGE' : 'JS COMPATIBLE'}
+                  </span>
                 </div>
 
-                {/* Challenge Type Workspaces */}
-                {challenge.type === 'coding' && (
-                  <div className="coding-editor-container">
-                    <textarea
-                      className="editor-textarea"
-                      value={editorContent}
-                      onChange={(e) => setEditorContent(e.target.value)}
-                      spellCheck="false"
-                    />
-                  </div>
-                )}
-
-                {challenge.type === 'parsons' && (
-                  <div className="parsons-container">
-                    <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '8px' }}>
-                      Drag and drop the blocks to place them in the correct semantic order:
-                    </p>
-                    {parsonsLines.map((line, index) => (
-                      <div
-                        key={line.id}
-                        className="parsons-row"
-                        draggable
-                        onDragStart={(e) => handleDragStart(e, index)}
-                        onDragOver={handleDragOver}
-                        onDrop={(e) => handleDrop(e, index)}
-                      >
-                        <span className="drag-handle">☰</span>
-                        <div className="parsons-code">{line.content}</div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                {challenge.type === 'bug_hunt' && (
-                  <div className="bughunt-container">
-                    <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '8px', fontFamily: 'var(--font-sans)' }}>
-                      Select the line that contains the syntax or logic bug:
-                    </p>
-                    {challenge.lines.map((line, index) => (
-                      <div
-                        key={index}
-                        className={`bughunt-line ${selectedBugIndex === index ? 'selected' : ''}`}
-                        onClick={() => setSelectedBugIndex(index)}
-                      >
-                        <div className="line-number">{index + 1}</div>
-                        <div className="line-code">{line}</div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                {challenge.type === 'multiple_choice' && (
-                  <div className="multiple-choice-container" style={{ display: 'flex', flexDirection: 'column', flexGrow: 1 }}>
-                    {challenge.codeSnippet && (
-                      <pre className="code-preview-block">
-                        <code>{challenge.codeSnippet}</code>
-                      </pre>
-                    )}
-                    <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '12px' }}>
-                      Select the correct output value or block answer:
-                    </p>
-                    <div className="choice-options-grid">
-                      {challenge.options.map((opt, index) => {
-                        const optionLetter = String.fromCharCode(65 + index); // A, B, C, D...
-                        const isSelected = selectedChoiceIndex === index;
-                        return (
-                          <div 
-                            key={index} 
-                            className={`choice-option-card ${isSelected ? 'selected' : ''}`}
-                            onClick={() => setSelectedChoiceIndex(index)}
+                {/* MINI GAME WORKSPACE */}
+                {playingMiniGame ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1 }}>
+                    {playingMiniGame.type === 'mini_bug_hunt' && playingMiniGame.codeLines && (
+                      <div className="bughunt-container">
+                        <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '8px' }}>
+                          Select the line that contains the bug:
+                        </p>
+                        {playingMiniGame.codeLines.map((line, index) => (
+                          <div
+                            key={index}
+                            className={`bughunt-line ${selectedBugIndex === index ? 'selected' : ''}`}
+                            onClick={() => setSelectedBugIndex(index)}
                           >
-                            <span className="choice-option-badge">{optionLetter}</span>
-                            <span>{opt}</span>
+                            <div className="line-number">{index + 1}</div>
+                            <div className="line-code">{line}</div>
                           </div>
-                        );
-                      })}
+                        ))}
+                      </div>
+                    )}
+
+                    {playingMiniGame.type !== 'mini_bug_hunt' && (
+                      <div className="multiple-choice-container" style={{ display: 'flex', flexDirection: 'column', flexGrow: 1 }}>
+                        {playingMiniGame.codeSnippet && (
+                          <pre className="code-preview-block">
+                            <code>{playingMiniGame.codeSnippet}</code>
+                          </pre>
+                        )}
+                        <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '12px' }}>
+                          Select the correct choice:
+                        </p>
+                        <div className="choice-options-grid">
+                          {playingMiniGame.options?.map((opt, index) => {
+                            const optionLetter = String.fromCharCode(65 + index);
+                            const isSelected = selectedChoiceIndex === index;
+                            return (
+                              <div
+                                key={index}
+                                className={`choice-option-card ${isSelected ? 'selected' : ''}`}
+                                onClick={() => setSelectedChoiceIndex(index)}
+                              >
+                                <span className="choice-option-badge">{optionLetter}</span>
+                                <span style={{ whiteSpace: 'pre-wrap' }}>{opt}</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="arena-actions" style={{ marginTop: 'auto', paddingTop: '16px' }}>
+                      <button className="btn-neon btn-secondary" onClick={() => { setIsPlaying(false); setPlayingMiniGame(null); }}>
+                        EXIT MINI GAME
+                      </button>
+                      <button className="btn-neon btn-purple" onClick={submitMiniGameSolution}>
+                        SUBMIT ANSWER
+                      </button>
                     </div>
                   </div>
-                )}
+                ) : (
+                  /* STANDARD DAILY CHALLENGE WORKSPACE */
+                  <>
+                    {challenge.type === 'coding' && (
+                      <div className="coding-editor-container">
+                        <textarea
+                          className="editor-textarea"
+                          value={editorContent}
+                          onChange={(e) => setEditorContent(e.target.value)}
+                          spellCheck="false"
+                        />
+                      </div>
+                    )}
 
-                <div className="arena-actions">
-                  <button className="btn-neon btn-secondary" onClick={() => setIsPlaying(false)}>
-                    ABORT MISSION
-                  </button>
-                  {challenge.type === 'coding' && (
-                    <button className="btn-neon btn-cyan" onClick={runCodeTests}>
-                      RUN TESTS
-                    </button>
-                  )}
-                  <button className="btn-neon btn-purple" onClick={submitSolution}>
-                    SUBMIT VECTOR
-                  </button>
-                </div>
+                    {challenge.type === 'parsons' && (
+                      <div className="parsons-container">
+                        <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '8px' }}>
+                          Drag and drop the blocks to place them in the correct semantic order:
+                        </p>
+                        {parsonsLines.map((line, index) => (
+                          <div
+                            key={line.id}
+                            className="parsons-row"
+                            draggable
+                            onDragStart={(e) => handleDragStart(e, index)}
+                            onDragOver={handleDragOver}
+                            onDrop={(e) => handleDrop(e, index)}
+                          >
+                            <span className="drag-handle">☰</span>
+                            <div className="parsons-code">{line.content}</div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {challenge.type === 'bug_hunt' && (
+                      <div className="bughunt-container">
+                        <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '8px', fontFamily: 'var(--font-sans)' }}>
+                          Select the line that contains the syntax or logic bug:
+                        </p>
+                        {challenge.lines.map((line, index) => (
+                          <div
+                            key={index}
+                            className={`bughunt-line ${selectedBugIndex === index ? 'selected' : ''}`}
+                            onClick={() => setSelectedBugIndex(index)}
+                          >
+                            <div className="line-number">{index + 1}</div>
+                            <div className="line-code">{line}</div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {challenge.type === 'multiple_choice' && (
+                      <div className="multiple-choice-container" style={{ display: 'flex', flexDirection: 'column', flexGrow: 1 }}>
+                        {challenge.codeSnippet && (
+                          <pre className="code-preview-block">
+                            <code>{challenge.codeSnippet}</code>
+                          </pre>
+                        )}
+                        <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '12px' }}>
+                          Select the correct output value or block answer:
+                        </p>
+                        <div className="choice-options-grid">
+                          {challenge.options.map((opt, index) => {
+                            const optionLetter = String.fromCharCode(65 + index);
+                            const isSelected = selectedChoiceIndex === index;
+                            return (
+                              <div 
+                                key={index} 
+                                className={`choice-option-card ${isSelected ? 'selected' : ''}`}
+                                onClick={() => setSelectedChoiceIndex(index)}
+                              >
+                                <span className="choice-option-badge">{optionLetter}</span>
+                                <span>{opt}</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="arena-actions">
+                      <button className="btn-neon btn-secondary" onClick={() => setIsPlaying(false)}>
+                        ABORT MISSION
+                      </button>
+                      {challenge.type === 'coding' && (
+                        <button className="btn-neon btn-cyan" onClick={runCodeTests}>
+                          RUN TESTS
+                        </button>
+                      )}
+                      <button className="btn-neon btn-purple" onClick={submitSolution}>
+                        SUBMIT VECTOR
+                      </button>
+                    </div>
+                  </>
+                )}
               </div>
             </div>
           </div>

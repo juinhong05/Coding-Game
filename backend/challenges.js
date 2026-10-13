@@ -372,3 +372,309 @@ function getChallengeForDate(dateStr, language = 'python') {
 }
 
 export { CHALLENGE_BANK, getChallengeForDate };
+
+// ─── Mini-Game Bank ────────────────────────────────────────────────────────────
+// Each mini-game has: id, title, type, unlockLevel, description, and question data.
+// unlockLevel is per-language (e.g. unlockLevel: 10 means level 10 in that language)
+
+export const MINI_GAME_BANK = {
+  python: [
+    // ── GAME 1: Bug Hunt (unlock at level 10) ──────────────────────────
+    {
+      id: 'py_mini_bughunt_1',
+      title: 'Bug Hunt: Variables',
+      type: 'mini_bug_hunt',
+      unlockLevel: 10,
+      description: 'One of these lines has a bug. Tap the buggy line number.',
+      codeLines: [
+        'x = 10',
+        'y = 20',
+        'z = x + y',
+        'print(z'
+      ],
+      bugLineIndex: 3,
+      explanation: 'Line 4 is missing the closing parenthesis `)` for `print()`.'
+    },
+    {
+      id: 'py_mini_bughunt_2',
+      title: 'Bug Hunt: Strings',
+      type: 'mini_bug_hunt',
+      unlockLevel: 10,
+      description: 'One of these lines has a bug. Tap the buggy line number.',
+      codeLines: [
+        'name = "Alice"',
+        'greeting = "Hello, " + name',
+        'Print(greeting)',
+        'age = 20'
+      ],
+      bugLineIndex: 2,
+      explanation: '`Print` with capital P is not valid in Python. The correct function is lowercase `print()`.'
+    },
+    {
+      id: 'py_mini_bughunt_3',
+      title: 'Bug Hunt: Conditions',
+      type: 'mini_bug_hunt',
+      unlockLevel: 10,
+      description: 'One of these lines has a bug. Tap the buggy line number.',
+      codeLines: [
+        'score = 85',
+        'if score >= 50',
+        '    print("Pass")',
+        'else:',
+        '    print("Fail")'
+      ],
+      bugLineIndex: 1,
+      explanation: 'The `if` statement is missing a colon `:` at the end. Python requires `if score >= 50:`.'
+    },
+    // ── GAME 2: Output Predictor (unlock at level 20) ──────────────────
+    {
+      id: 'py_mini_output_1',
+      title: 'Output Predictor: Loops',
+      type: 'mini_output_predict',
+      unlockLevel: 20,
+      description: 'What will this code print?',
+      codeSnippet: 'total = 0\nfor i in range(3):\n    total += i\nprint(total)',
+      options: ['0', '3', '6', '5'],
+      correctOptionIndex: 1,
+      explanation: 'range(3) gives 0, 1, 2. Sum = 0+1+2 = 3.'
+    },
+    {
+      id: 'py_mini_output_2',
+      title: 'Output Predictor: Indexing',
+      type: 'mini_output_predict',
+      unlockLevel: 20,
+      description: 'What will this code print?',
+      codeSnippet: 'fruits = ["apple", "banana", "cherry"]\nprint(fruits[1])',
+      options: ['"apple"', '"banana"', '"cherry"', 'Error'],
+      correctOptionIndex: 1,
+      explanation: 'Lists are zero-indexed. `fruits[1]` is the second item: "banana".'
+    },
+    {
+      id: 'py_mini_output_3',
+      title: 'Output Predictor: Strings',
+      type: 'mini_output_predict',
+      unlockLevel: 20,
+      description: 'What will this code print?',
+      codeSnippet: 'a = "Hello"\nb = "World"\nprint(a + " " + b)',
+      options: ['"HelloWorld"', '"Hello World"', 'Hello World', 'Error'],
+      correctOptionIndex: 2,
+      explanation: 'String concatenation with `+` joins "Hello", " ", and "World" → `Hello World`.'
+    },
+    // ── GAME 3: Code Fill-In (unlock at level 30) ──────────────────────
+    {
+      id: 'py_mini_fillin_1',
+      title: 'Fill In: Sum a List',
+      type: 'mini_fill_in',
+      unlockLevel: 30,
+      description: 'What token fills the blank to sum all numbers in the list?',
+      codeSnippet: 'nums = [1, 2, 3, 4]\ntotal = ___\nfor n in nums:\n    total += n\nprint(total)',
+      options: ['None', '0', 'nums[0]', 'len(nums)'],
+      correctOptionIndex: 1,
+      explanation: 'The accumulator `total` must start at `0` before adding each number.'
+    },
+    {
+      id: 'py_mini_fillin_2',
+      title: 'Fill In: Function Return',
+      type: 'mini_fill_in',
+      unlockLevel: 30,
+      description: 'What keyword fills the blank to send the result back from the function?',
+      codeSnippet: 'def add(a, b):\n    ___ a + b\n\nresult = add(3, 4)\nprint(result)',
+      options: ['print', 'yield', 'return', 'pass'],
+      correctOptionIndex: 2,
+      explanation: '`return` sends the computed value back to the caller.'
+    },
+    {
+      id: 'py_mini_fillin_3',
+      title: 'Fill In: Condition',
+      type: 'mini_fill_in',
+      unlockLevel: 30,
+      description: 'What fills the blank to check if both conditions are true?',
+      codeSnippet: 'age = 20\nhas_id = True\nif age >= 18 ___ has_id:\n    print("Entry allowed")',
+      options: ['or', 'not', 'and', '+'],
+      correctOptionIndex: 2,
+      explanation: '`and` requires BOTH conditions to be True before allowing entry.'
+    },
+    // ── GAME 4: Speed Refactor (unlock at level 50) ────────────────────
+    {
+      id: 'py_mini_refactor_1',
+      title: 'Speed Refactor: Best Function',
+      type: 'mini_refactor',
+      unlockLevel: 50,
+      description: 'Which function definition is correct and most efficient?',
+      options: [
+        'def square x:\n    return x * x',
+        'def square(x):\n    return x * x',
+        'function square(x):\n    return x * x',
+        'def square(x)\n    return x * x'
+      ],
+      correctOptionIndex: 1,
+      explanation: 'Python functions use `def name(params):` with parentheses and a colon. No `function` keyword.'
+    },
+    {
+      id: 'py_mini_refactor_2',
+      title: 'Speed Refactor: Best Loop',
+      type: 'mini_refactor',
+      unlockLevel: 50,
+      description: 'Which is the best way to print numbers 1 to 5 in Python?',
+      options: [
+        'i = 1\nwhile i <= 5:\n    print(i)\n    i += 1',
+        'for i in range(1, 6):\n    print(i)',
+        'for i in range(5):\n    print(i + 1)',
+        'Both B and C are correct'
+      ],
+      correctOptionIndex: 3,
+      explanation: 'Options B and C both correctly print 1 to 5. `range(1,6)` is cleaner; `range(5)` with `+1` also works.'
+    }
+  ],
+
+  cpp: [
+    // ── GAME 1: Bug Hunt (unlock at level 10) ──────────────────────────
+    {
+      id: 'cpp_mini_bughunt_1',
+      title: 'Bug Hunt: Output',
+      type: 'mini_bug_hunt',
+      unlockLevel: 10,
+      description: 'One of these lines has a bug. Tap the buggy line number.',
+      codeLines: [
+        '#include <iostream>',
+        'int main() {',
+        '    std::cout << "Hello" << std::endl',
+        '    return 0;',
+        '}'
+      ],
+      bugLineIndex: 2,
+      explanation: 'Line 3 is missing a semicolon `;` at the end. In C++, all statements must end with `;`.'
+    },
+    {
+      id: 'cpp_mini_bughunt_2',
+      title: 'Bug Hunt: Variables',
+      type: 'mini_bug_hunt',
+      unlockLevel: 10,
+      description: 'One of these lines has a bug. Tap the buggy line number.',
+      codeLines: [
+        'int x = 5;',
+        'int y = 10;',
+        'int z = x + y',
+        'std::cout << z << std::endl;'
+      ],
+      bugLineIndex: 2,
+      explanation: 'Line 3 is missing a semicolon `;` after `x + y`.'
+    },
+    {
+      id: 'cpp_mini_bughunt_3',
+      title: 'Bug Hunt: Conditions',
+      type: 'mini_bug_hunt',
+      unlockLevel: 10,
+      description: 'One of these lines has a bug. Tap the buggy line number.',
+      codeLines: [
+        'int score = 75;',
+        'if (score >= 50) {',
+        '    std::cout << "Pass" << std::endl;',
+        '} else {',
+        '    std::cout << Fail << std::endl;',
+        '}'
+      ],
+      bugLineIndex: 4,
+      explanation: 'Line 5: "Fail" must be wrapped in double quotes as a string: `"Fail"`.'
+    },
+    // ── GAME 2: Output Predictor (unlock at level 20) ──────────────────
+    {
+      id: 'cpp_mini_output_1',
+      title: 'Output Predictor: Loop',
+      type: 'mini_output_predict',
+      unlockLevel: 20,
+      description: 'What will this code print?',
+      codeSnippet: 'int total = 0;\nfor (int i = 0; i < 3; i++) {\n    total += i;\n}\nstd::cout << total << std::endl;',
+      options: ['0', '3', '6', '5'],
+      correctOptionIndex: 1,
+      explanation: 'i goes 0, 1, 2. total = 0+1+2 = 3.'
+    },
+    {
+      id: 'cpp_mini_output_2',
+      title: 'Output Predictor: Array',
+      type: 'mini_output_predict',
+      unlockLevel: 20,
+      description: 'What will this code print?',
+      codeSnippet: 'int nums[] = {10, 20, 30};\nstd::cout << nums[2] << std::endl;',
+      options: ['10', '20', '30', 'Error'],
+      correctOptionIndex: 2,
+      explanation: 'Arrays are zero-indexed. `nums[2]` is the third element: 30.'
+    },
+    {
+      id: 'cpp_mini_output_3',
+      title: 'Output Predictor: Strings',
+      type: 'mini_output_predict',
+      unlockLevel: 20,
+      description: 'What will this code print?',
+      codeSnippet: '#include <string>\nstd::string a = "Hello";\nstd::string b = " World";\nstd::cout << a + b << std::endl;',
+      options: ['"Hello World"', 'Hello World', 'HelloWorld', 'Error'],
+      correctOptionIndex: 1,
+      explanation: '`std::string` supports `+` for concatenation: "Hello" + " World" → Hello World.'
+    },
+    // ── GAME 3: Code Fill-In (unlock at level 30) ──────────────────────
+    {
+      id: 'cpp_mini_fillin_1',
+      title: 'Fill In: Sum a Loop',
+      type: 'mini_fill_in',
+      unlockLevel: 30,
+      description: 'What token fills the blank to sum values 1 to 4?',
+      codeSnippet: 'int total = ___;\nfor (int i = 1; i <= 4; i++) {\n    total += i;\n}\nstd::cout << total;',
+      options: ['1', 'i', '0', 'null'],
+      correctOptionIndex: 2,
+      explanation: 'The accumulator `total` must start at `0` to correctly sum all values.'
+    },
+    {
+      id: 'cpp_mini_fillin_2',
+      title: 'Fill In: Function Return Type',
+      type: 'mini_fill_in',
+      unlockLevel: 30,
+      description: 'What return type fills the blank for a function that returns an integer?',
+      codeSnippet: '___ add(int a, int b) {\n    return a + b;\n}',
+      options: ['void', 'string', 'int', 'float'],
+      correctOptionIndex: 2,
+      explanation: 'Since the function returns `a + b` (both ints), the return type must be `int`.'
+    },
+    {
+      id: 'cpp_mini_fillin_3',
+      title: 'Fill In: Logical Operator',
+      type: 'mini_fill_in',
+      unlockLevel: 30,
+      description: 'What fills the blank to check if EITHER condition is true?',
+      codeSnippet: 'int x = 5;\nint y = 15;\nif (x > 10 ___ y > 10) {\n    std::cout << "At least one is large";\n}',
+      options: ['&&', '!', '||', '+'],
+      correctOptionIndex: 2,
+      explanation: '`||` is the OR operator in C++. It returns true if either condition is true.'
+    },
+    // ── GAME 4: Speed Refactor (unlock at level 50) ────────────────────
+    {
+      id: 'cpp_mini_refactor_1',
+      title: 'Speed Refactor: Best Function',
+      type: 'mini_refactor',
+      unlockLevel: 50,
+      description: 'Which C++ function definition is correct?',
+      options: [
+        'def square(int x) {\n    return x * x;\n}',
+        'int square(int x) {\n    return x * x;\n}',
+        'int square(x) {\n    return x * x;\n}',
+        'function square(int x):\n    return x * x'
+      ],
+      correctOptionIndex: 1,
+      explanation: 'C++ functions need a return type (`int`), typed parameters (`int x`), and curly brace body. No `def` or `function` keywords.'
+    },
+    {
+      id: 'cpp_mini_refactor_2',
+      title: 'Speed Refactor: Best Loop',
+      type: 'mini_refactor',
+      unlockLevel: 50,
+      description: 'Which loop correctly prints 1 to 5 in C++?',
+      options: [
+        'for (int i = 0; i < 5; i++)\n    std::cout << i;',
+        'for (int i = 1; i <= 5; i++)\n    std::cout << i << std::endl;',
+        'while i <= 5:\n    std::cout << i;',
+        'for int i = 1 to 5:\n    print(i)'
+      ],
+      correctOptionIndex: 1,
+      explanation: 'Option B uses the correct C++ for-loop syntax starting at 1 with `i <= 5`.'
+    }
+  ]
+};

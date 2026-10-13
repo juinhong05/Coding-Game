@@ -61,6 +61,23 @@ export async function initDb() {
 // Helpers to map between DB row (snake_case) and App Model (camelCase)
 function mapRowToUser(row) {
   if (!row) return null;
+
+  // Support both old flat array and new per-language object
+  let completedChallenges = row.completed_challenges || row.completedChallenges || { python: [], cpp: [] };
+  if (Array.isArray(completedChallenges)) {
+    // Migrate legacy flat array: treat all as python
+    completedChallenges = { python: completedChallenges, cpp: [] };
+  }
+  if (!completedChallenges.python) completedChallenges.python = [];
+  if (!completedChallenges.cpp) completedChallenges.cpp = [];
+
+  let miniGamesCompleted = row.mini_games_completed || row.miniGamesCompleted || { python: [], cpp: [] };
+  if (Array.isArray(miniGamesCompleted)) {
+    miniGamesCompleted = { python: miniGamesCompleted, cpp: [] };
+  }
+  if (!miniGamesCompleted.python) miniGamesCompleted.python = [];
+  if (!miniGamesCompleted.cpp) miniGamesCompleted.cpp = [];
+
   return {
     id: row.id,
     syncCode: row.sync_code || row.syncCode || '',
@@ -69,8 +86,9 @@ function mapRowToUser(row) {
     score: typeof row.score === 'number' ? row.score : 0,
     streak: typeof row.streak === 'number' ? row.streak : 0,
     lastCompletedDate: row.last_completed_date || row.lastCompletedDate || null,
-    completedChallenges: row.completed_challenges || row.completedChallenges || [],
+    completedChallenges,
     completionHistory: row.completion_history || row.completionHistory || {},
+    miniGamesCompleted,
     preferredLanguage: row.preferred_language || row.preferredLanguage || 'python',
     canonicalId: row.canonical_id || row.canonicalId || row.id,
     createdAt: row.created_at || row.createdAt || new Date().toISOString(),
@@ -89,6 +107,7 @@ function mapUserToRow(user) {
     last_completed_date: user.lastCompletedDate,
     completed_challenges: user.completedChallenges,
     completion_history: user.completionHistory,
+    mini_games_completed: user.miniGamesCompleted,
     preferred_language: user.preferredLanguage,
     canonical_id: user.canonicalId,
     created_at: user.createdAt,
@@ -198,8 +217,9 @@ export const db = {
       score: 0,
       streak: 0,
       lastCompletedDate: null,
-      completedChallenges: [],
+      completedChallenges: { python: [], cpp: [] },
       completionHistory: {},
+      miniGamesCompleted: { python: [], cpp: [] },
       preferredLanguage: 'python',
       canonicalId: id,
       createdAt: new Date().toISOString(),
@@ -253,18 +273,47 @@ export const db = {
 
       const user = mapRowToUser(row);
 
-      // Merge completed list
-      const existingCompleted = new Set(user.completedChallenges || []);
+      // Merge per-language completed challenges (handle legacy client sending a flat array)
+      let incomingPy = [];
+      let incomingCpp = [];
       if (Array.isArray(progress.completedChallenges)) {
-        progress.completedChallenges.forEach(c => existingCompleted.add(c));
+        const lang = user.preferredLanguage || 'python';
+        if (lang === 'cpp') incomingCpp = progress.completedChallenges;
+        else incomingPy = progress.completedChallenges;
+      } else if (progress.completedChallenges) {
+        incomingPy = progress.completedChallenges.python || [];
+        incomingCpp = progress.completedChallenges.cpp || [];
       }
-      const mergedCompleted = Array.from(existingCompleted).sort();
-      
+
+      const mergedCompleted = {
+        python: Array.from(new Set([
+          ...(user.completedChallenges.python || []),
+          ...incomingPy
+        ])).sort(),
+        cpp: Array.from(new Set([
+          ...(user.completedChallenges.cpp || []),
+          ...incomingCpp
+        ])).sort()
+      };
+
+      // Merge per-language mini-games completed
+      const mergedMiniGames = {
+        python: Array.from(new Set([
+          ...(user.miniGamesCompleted.python || []),
+          ...(progress.miniGamesCompleted?.python || [])
+        ])).sort(),
+        cpp: Array.from(new Set([
+          ...(user.miniGamesCompleted.cpp || []),
+          ...(progress.miniGamesCompleted?.cpp || [])
+        ])).sort()
+      };
+
       const updatePayload = {
         completed_challenges: mergedCompleted,
+        mini_games_completed: mergedMiniGames,
         updated_at: new Date().toISOString()
       };
-      
+
       if (typeof progress.score === 'number') {
         updatePayload.score = Math.max(user.score || 0, progress.score);
       }
@@ -293,11 +342,47 @@ export const db = {
       const user = data.users[canonicalId];
       if (!user) return null;
 
-      const existingCompleted = new Set(user.completedChallenges);
-      if (Array.isArray(progress.completedChallenges)) {
-        progress.completedChallenges.forEach(c => existingCompleted.add(c));
+      // Ensure legacy users get the right shape
+      if (Array.isArray(user.completedChallenges)) {
+        user.completedChallenges = { python: user.completedChallenges, cpp: [] };
       }
-      user.completedChallenges = Array.from(existingCompleted).sort();
+      if (!user.completedChallenges) user.completedChallenges = { python: [], cpp: [] };
+      if (!user.miniGamesCompleted) user.miniGamesCompleted = { python: [], cpp: [] };
+
+      // Merge per-language completed challenges (handle legacy client sending a flat array)
+      let incomingPy = [];
+      let incomingCpp = [];
+      if (Array.isArray(progress.completedChallenges)) {
+        const lang = user.preferredLanguage || 'python';
+        if (lang === 'cpp') incomingCpp = progress.completedChallenges;
+        else incomingPy = progress.completedChallenges;
+      } else if (progress.completedChallenges) {
+        incomingPy = progress.completedChallenges.python || [];
+        incomingCpp = progress.completedChallenges.cpp || [];
+      }
+
+      user.completedChallenges = {
+        python: Array.from(new Set([
+          ...(user.completedChallenges.python || []),
+          ...incomingPy
+        ])).sort(),
+        cpp: Array.from(new Set([
+          ...(user.completedChallenges.cpp || []),
+          ...incomingCpp
+        ])).sort()
+      };
+
+      // Merge per-language mini-games completed
+      user.miniGamesCompleted = {
+        python: Array.from(new Set([
+          ...(user.miniGamesCompleted.python || []),
+          ...(progress.miniGamesCompleted?.python || [])
+        ])).sort(),
+        cpp: Array.from(new Set([
+          ...(user.miniGamesCompleted.cpp || []),
+          ...(progress.miniGamesCompleted?.cpp || [])
+        ])).sort()
+      };
 
       if (typeof progress.score === 'number') {
         user.score = Math.max(user.score, progress.score);
