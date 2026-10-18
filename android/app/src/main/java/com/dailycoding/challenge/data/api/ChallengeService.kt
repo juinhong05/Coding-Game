@@ -40,6 +40,15 @@ interface ChallengeService {
 
     @GET("leaderboard")
     suspend fun getLeaderboard(): List<LeaderboardItem>
+
+    @GET("minigames")
+    suspend fun getMiniGames(
+        @Query("userId") userId: String,
+        @Query("language") language: String
+    ): MiniGamesResponse
+
+    @POST("minigames/verify")
+    suspend fun verifyMiniGame(@Body request: MiniGameVerifyRequest): MiniGameVerifyResponse
 }
 
 object RetrofitInstance {

@@ -36,8 +36,14 @@ class MainActivity : ComponentActivity() {
                 var userState by remember { mutableStateOf<User?>(null) }
                 var challengeState by remember { mutableStateOf<Challenge?>(null) }
                 var leaderboardState by remember { mutableStateOf<List<LeaderboardItem>>(emptyList()) }
+                var miniGamesState by remember { mutableStateOf<MiniGamesResponse?>(null) }
+                var miniGamesLoading by remember { mutableStateOf(false) }
+                var miniGamesError by remember { mutableStateOf<String?>(null) }
+                var activeMiniGame by remember { mutableStateOf<MiniGame?>(null) }
+                var miniGameFeedback by remember { mutableStateOf<Pair<Boolean, String>?>(null) }
+                var miniGameSubmitting by remember { mutableStateOf(false) }
                 
-                var activeTab by remember { mutableStateOf("dashboard") } // "dashboard", "leaderboard", "account"
+                var activeTab by remember { mutableStateOf("dashboard") } // dashboard, minigames, leaderboard, account
                 var isPlaying by remember { mutableStateOf(false) }
                 var isLoading by remember { mutableStateOf(true) }
                 var networkError by remember { mutableStateOf<String?>(null) }
@@ -92,6 +98,21 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
+                LaunchedEffect(activeTab, userState?.id, userState?.preferredLanguage) {
+                    val currentUser = userState
+                    if (activeTab == "minigames" && currentUser != null) {
+                        miniGamesLoading = true
+                        miniGamesError = null
+                        try {
+                            miniGamesState = RetrofitInstance.api.getMiniGames(currentUser.id, currentUser.preferredLanguage)
+                        } catch (e: Exception) {
+                            miniGamesError = e.localizedMessage ?: "Could not load mini games"
+                        } finally {
+                            miniGamesLoading = false
+                        }
+                    }
+                }
+
                 // Helper to reload leaderboard
                 val refreshLeaderboard: () -> Unit = {
                     lifecycleScope.launch {
@@ -111,6 +132,9 @@ class MainActivity : ComponentActivity() {
                             val user = RetrofitInstance.api.loginUser(LoginRequest(username, password))
                             getPreferences(Context.MODE_PRIVATE).edit().putString("user_id", user.id).apply()
                             userState = user
+                            activeMiniGame = null
+                            miniGameFeedback = null
+                            miniGamesState = null
                             authStatus = "success" to "Signed in as ${user.username}"
                             
                             // Reload challenge & leaderboard for this account
@@ -137,6 +161,9 @@ class MainActivity : ComponentActivity() {
                             )
                             getPreferences(Context.MODE_PRIVATE).edit().putString("user_id", user.id).apply()
                             userState = user
+                            activeMiniGame = null
+                            miniGameFeedback = null
+                            miniGamesState = null
                             authStatus = "success" to "Profile secured!"
                             
                             // Reload challenge & leaderboard
@@ -158,6 +185,9 @@ class MainActivity : ComponentActivity() {
                             val guestUser = RetrofitInstance.api.registerUser()
                             getPreferences(Context.MODE_PRIVATE).edit().putString("user_id", guestUser.id).apply()
                             userState = guestUser
+                            activeMiniGame = null
+                            miniGameFeedback = null
+                            miniGamesState = null
                             
                             // Reload challenge & leaderboard for guest
                             challengeState = RetrofitInstance.api.getDailyChallenge(userId = guestUser.id)
@@ -181,6 +211,9 @@ class MainActivity : ComponentActivity() {
                                 val mergedUser = RetrofitInstance.api.linkProfile(user.id, LinkRequest(code))
                                 getPreferences(Context.MODE_PRIVATE).edit().putString("user_id", mergedUser.id).apply()
                                 userState = mergedUser
+                                activeMiniGame = null
+                                miniGameFeedback = null
+                                miniGamesState = null
                                 syncStatus = "success" to "Sync complete! Connected as ${mergedUser.nickname}"
                                 
                                 // Reload challenge
@@ -202,8 +235,65 @@ class MainActivity : ComponentActivity() {
                                 val updatedUser = RetrofitInstance.api.updateLanguage(user.id, LanguageRequest(lang))
                                 userState = updatedUser
                                 challengeState = RetrofitInstance.api.getDailyChallenge(userId = updatedUser.id)
+                                activeMiniGame = null
+                                miniGameFeedback = null
+                                miniGamesState = null
                             } catch (e: Exception) {
                                 // ignore
+                            }
+                        }
+                    }
+                }
+
+                val refreshMiniGames: () -> Unit = {
+                    val currentUser = userState
+                    if (currentUser != null) {
+                        lifecycleScope.launch {
+                            miniGamesLoading = true
+                            miniGamesError = null
+                            try {
+                                miniGamesState = RetrofitInstance.api.getMiniGames(currentUser.id, currentUser.preferredLanguage)
+                            } catch (e: Exception) {
+                                miniGamesError = e.localizedMessage ?: "Could not load mini games"
+                            } finally {
+                                miniGamesLoading = false
+                            }
+                        }
+                    }
+                }
+
+                val submitMiniGame: (String) -> Unit = { code ->
+                    val currentUser = userState
+                    val game = activeMiniGame
+                    if (currentUser != null && game != null && !miniGameSubmitting) {
+                        miniGameSubmitting = true
+                        miniGameFeedback = null
+                        lifecycleScope.launch {
+                            try {
+                                val result = RetrofitInstance.api.verifyMiniGame(
+                                    MiniGameVerifyRequest(game.id, code, currentUser.id, currentUser.preferredLanguage)
+                                )
+                                if (result.success) {
+                                    miniGameFeedback = true to if (result.awardedPoints > 0) {
+                                        "Code accepted! +${result.awardedPoints} points."
+                                    } else {
+                                        "Code accepted! Replay complete; points were already awarded."
+                                    }
+                                    userState = currentUser.copy(score = currentUser.score + result.awardedPoints)
+                                    try {
+                                        userState = RetrofitInstance.api.getUser(currentUser.id)
+                                        miniGamesState = RetrofitInstance.api.getMiniGames(currentUser.id, currentUser.preferredLanguage)
+                                    } catch (_: Exception) {
+                                        // The server accepted the solution; profile refresh can retry later.
+                                    }
+                                    refreshLeaderboard()
+                                } else {
+                                    miniGameFeedback = false to (result.explanation ?: "That code does not match the target yet.")
+                                }
+                            } catch (e: Exception) {
+                                miniGameFeedback = false to (e.localizedMessage ?: "Could not check your code")
+                            } finally {
+                                miniGameSubmitting = false
                             }
                         }
                     }
@@ -355,6 +445,16 @@ class MainActivity : ComponentActivity() {
                                             )
                                         )
                                         NavigationBarItem(
+                                            selected = activeTab == "minigames",
+                                            onClick = { activeTab = "minigames" },
+                                            icon = { Text(text = "🕹️", fontSize = 18.sp) },
+                                            label = { Text("Games") },
+                                            colors = NavigationBarItemDefaults.colors(
+                                                selectedIconColor = NeonPurple,
+                                                indicatorColor = NeonPurple.copy(alpha = 0.12f)
+                                            )
+                                        )
+                                        NavigationBarItem(
                                             selected = activeTab == "leaderboard",
                                             onClick = { activeTab = "leaderboard"; refreshLeaderboard() },
                                             icon = { Text(text = "📊", fontSize = 18.sp) },
@@ -384,6 +484,21 @@ class MainActivity : ComponentActivity() {
                                             challenge = challenge,
                                             onStartChallenge = { isPlaying = true },
                                             onLanguageSelected = handleLanguageSelected
+                                        )
+                                        "minigames" -> MiniGamesScreen(
+                                            user = user,
+                                            response = miniGamesState,
+                                            loading = miniGamesLoading,
+                                            error = miniGamesError,
+                                            activeGame = activeMiniGame,
+                                            feedback = miniGameFeedback,
+                                            submitting = miniGameSubmitting,
+                                            onLanguageSelected = handleLanguageSelected,
+                                            onRetry = refreshMiniGames,
+                                            onPlay = { game -> activeMiniGame = game; miniGameFeedback = null },
+                                            onBack = { activeMiniGame = null; miniGameFeedback = null },
+                                            onCodeChanged = { miniGameFeedback = null },
+                                            onSubmit = submitMiniGame
                                         )
                                         "leaderboard" -> LeaderboardScreen(
                                             leaderboard = leaderboardState,
