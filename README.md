@@ -1,6 +1,6 @@
 # ⚡ Synapse - Daily Coding Curriculum
 
-Synapse is an interactive, zero-typing daily coding game designed to teach programming principles to absolute beginners. It features a progressive 200-level syllabus, interactive tutorials, drag-and-drop Parsons puzzles, and multiple-choice questions to build coding familiarity from scratch.
+Synapse is an interactive daily coding game designed to teach programming principles to beginners. It features a progressive 200-level syllabus, tutorials, Parsons puzzles, multiple-choice questions, and short code-writing mini games.
 
 ### 🌐 Live Production Link
 Play the live web application here: **[https://coding-game-theta.vercel.app/](https://coding-game-theta.vercel.app/)**
@@ -24,6 +24,7 @@ Play the live web application here: **[https://coding-game-theta.vercel.app/](ht
 * **Per-language progression and scoring**: Python and C++ levels advance independently. A completed level is recorded once, so replaying a level does not award its score again.
 * **Streak recovery**: Missing one day turns the streak indicator gray; complete two levels to recover the streak. Missing two or more days resets it.
 * **Forgot password**: Reset an account password with its username and six-character device sync code.
+* **Code-writing mini games**: Eight games per language replace the old debugging and multiple-choice mini games: Christmas Tree Builder, Pattern Printer, Robot Maze, Text Adventure, Mini Shop Checkout, Secret Message Decoder, Scoreboard Builder, and Drawing with Coordinates. Write the missing Python or C++ lines to make the target output. Games unlock at levels 1, 3, 5, 8, 10, 15, 20, and 25. The API checks the submitted lines against each puzzle's solution without executing user code. Each game awards 10 points once; replays award no additional points.
 * **Concept Tutorials**: Integrated sidebar guides explaining active level logic, formatting rules, and code patterns.
 * **Cloud Progress Sync**: Secure guest stats (Scores & Streaks) with a cloud login account to play seamlessly across Web browser clients and native Android Mobile clients.
 
@@ -72,7 +73,7 @@ npm run dev
   - **Key**: `SUPABASE_URL` | **Value**: `https://your-project-id.supabase.co`
   - **Key**: `SUPABASE_KEY` | **Value**: `your-supabase-service-role-or-anon-key`
 * *Note: If Supabase variables are not set, the server will gracefully fallback to local file `database.json` storage.*
-* Deploy the **backend** after every backend change. A Vercel web deployment alone does not update the Render API. After deployment, `https://YOUR-RENDER-BACKEND-URL.onrender.com/api/version` should return `apiVersion: 2` and `progressFormat: "per-language"`.
+* Deploy the **backend** after every backend change. A Vercel web deployment alone does not update the Render API. After deployment, `https://YOUR-RENDER-BACKEND-URL.onrender.com/api/version` should return `apiVersion: 3` and `miniGamesFormat: "code-writing"`.
 * Level completion is only shown as successful after the API confirms it was saved. The API awards points only for a newly completed level or mini-game, so repeat submissions cannot raise the score.
 
 #### Supabase Database Table Setup (Run in Supabase SQL Editor):

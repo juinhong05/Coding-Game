@@ -21,6 +21,8 @@ function App() {
   const [parsonsLines, setParsonsLines] = useState([]);
   const [selectedBugIndex, setSelectedBugIndex] = useState(null);
   const [selectedChoiceIndex, setSelectedChoiceIndex] = useState(null);
+  const [miniCode, setMiniCode] = useState('');
+  const [miniOutput, setMiniOutput] = useState('');
   const [testResults, setTestResults] = useState([]);
   const [hasSubmitted, setHasSubmitted] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
@@ -161,6 +163,8 @@ function App() {
     setExplanationText('');
     setSelectedChoiceIndex(null);
     setSelectedBugIndex(null);
+    setMiniCode('');
+    setMiniOutput('');
     setIsPlaying(true);
   };
 
@@ -168,19 +172,9 @@ function App() {
   const submitMiniGameSolution = async () => {
     if (hasSubmitted || !playingMiniGame) return;
 
-    let submission = null;
-    if (playingMiniGame.type === 'mini_bug_hunt') {
-      if (selectedBugIndex === null) {
-        alert("Please select the buggy line first.");
-        return;
-      }
-      submission = selectedBugIndex;
-    } else {
-      if (selectedChoiceIndex === null) {
-        alert("Please select an option first.");
-        return;
-      }
-      submission = selectedChoiceIndex;
+    if (!miniCode.trim()) {
+      setExplanationText('Write the missing code before submitting.');
+      return;
     }
 
     try {
@@ -189,35 +183,37 @@ function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           gameId: playingMiniGame.id,
-          submission,
+          submission: miniCode,
           userId: user.id,
           language: user.preferredLanguage || 'python'
         })
       });
       const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Mini-game verification failed');
       setHasSubmitted(true);
       setExplanationText(data.explanation || '');
 
       if (data.success) {
         setIsSuccess(true);
+        setMiniOutput(data.output || '');
         // Refresh user profile and mini-games list
         const refreshed = await fetch(`${API_BASE}/user/${user.id}`).then(r => r.json());
         setUser(refreshed);
         fetchMiniGames(user.id, user.preferredLanguage);
         setScoreBreakdown({
-          base: 10,
+          base: data.awardedPoints || 0,
           timeBonus: 0,
           streakBonus: 0,
-          total: 10
+          total: data.awardedPoints || 0
         });
         setShowModal(true);
       } else {
         setIsSuccess(false);
-        alert("Incorrect answer. Check the explanation and try again!");
         setHasSubmitted(false);
       }
     } catch (err) {
       console.error("Mini-game verification error:", err);
+      setExplanationText(err.message || 'Could not check your code. Try again.');
     }
   };
 
@@ -857,7 +853,7 @@ function App() {
                   </div>
                 </div>
                 <p style={{ color: 'var(--text-secondary)', fontSize: '14px', marginBottom: '20px' }}>
-                  Special mini challenges unlocked as you master programming topics in your curriculum! Each cleared mini game awards +10 PTS.
+                  Write Python or C++ to complete each mini challenge. The first clear of each game awards +10 PTS; replays are for practice.
                 </p>
 
                 {miniGamesList.length === 0 ? (
@@ -865,13 +861,13 @@ function App() {
                     <div style={{ fontSize: '48px', marginBottom: '16px' }}>🔒</div>
                     <h3 style={{ fontSize: '20px', color: 'var(--text-primary)', marginBottom: '8px' }}>Mini Games Locked</h3>
                     <p style={{ color: 'var(--text-secondary)', maxWidth: '440px', margin: '0 auto', fontSize: '14px' }}>
-                      Reach <strong>Level 10</strong> in {user.preferredLanguage === 'cpp' ? 'C++' : 'Python'} to unlock your first Bug Hunt mini game challenge! Keep completing daily levels to level up.
+                      Complete <strong>Level 1</strong> in {user.preferredLanguage === 'cpp' ? 'C++' : 'Python'} to unlock Christmas Tree Builder. More code-writing games open as you level up.
                     </p>
                   </div>
                 ) : (
                   <div className="minigames-grid">
                     {miniGamesList.map((mg) => {
-                      const typeLabel = mg.type.replace('mini_', '').replace('_', ' ');
+                      const typeLabel = 'CODE WRITING';
                       return (
                         <div key={mg.id} className={`minigame-card ${mg.completed ? 'completed' : ''}`}>
                           <div>
@@ -1155,59 +1151,30 @@ function App() {
                 {/* MINI GAME WORKSPACE */}
                 {playingMiniGame ? (
                   <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1 }}>
-                    {playingMiniGame.type === 'mini_bug_hunt' && playingMiniGame.codeLines && (
-                      <div className="bughunt-container">
-                        <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '8px' }}>
-                          Select the line that contains the bug:
-                        </p>
-                        {playingMiniGame.codeLines.map((line, index) => (
-                          <div
-                            key={index}
-                            className={`bughunt-line ${selectedBugIndex === index ? 'selected' : ''}`}
-                            onClick={() => setSelectedBugIndex(index)}
-                          >
-                            <div className="line-number">{index + 1}</div>
-                            <div className="line-code">{line}</div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-
-                    {playingMiniGame.type !== 'mini_bug_hunt' && (
-                      <div className="multiple-choice-container" style={{ display: 'flex', flexDirection: 'column', flexGrow: 1 }}>
-                        {playingMiniGame.codeSnippet && (
-                          <pre className="code-preview-block">
-                            <code>{playingMiniGame.codeSnippet}</code>
-                          </pre>
-                        )}
-                        <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '12px' }}>
-                          Select the correct choice:
-                        </p>
-                        <div className="choice-options-grid">
-                          {playingMiniGame.options?.map((opt, index) => {
-                            const optionLetter = String.fromCharCode(65 + index);
-                            const isSelected = selectedChoiceIndex === index;
-                            return (
-                              <div
-                                key={index}
-                                className={`choice-option-card ${isSelected ? 'selected' : ''}`}
-                                onClick={() => setSelectedChoiceIndex(index)}
-                              >
-                                <span className="choice-option-badge">{optionLetter}</span>
-                                <span style={{ whiteSpace: 'pre-wrap' }}>{opt}</span>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    )}
+                    <div className="mini-code-workspace">
+                      <p className="mini-code-label">STARTER CODE</p>
+                      {playingMiniGame.before && <pre className="code-preview-block"><code>{playingMiniGame.before}</code></pre>}
+                      <label className="mini-code-label" htmlFor="mini-code-input">WRITE THE MISSING CODE</label>
+                      <textarea
+                        id="mini-code-input"
+                        className="mini-code-input"
+                        value={miniCode}
+                        onChange={(event) => setMiniCode(event.target.value)}
+                        placeholder={user.preferredLanguage === 'cpp' ? '// Type your C++ line(s) here' : '# Type your Python line(s) here'}
+                        spellCheck="false"
+                      />
+                      {playingMiniGame.after && <pre className="code-preview-block"><code>{playingMiniGame.after}</code></pre>}
+                      <p className="mini-code-label">TARGET OUTPUT</p>
+                      <pre className="mini-code-output">{playingMiniGame.expectedOutput}</pre>
+                      {miniOutput && <p className="mini-code-result">✓ Code accepted. Output matches the target.</p>}
+                    </div>
 
                     <div className="arena-actions" style={{ marginTop: 'auto', paddingTop: '16px' }}>
                       <button className="btn-neon btn-secondary" onClick={() => { setIsPlaying(false); setPlayingMiniGame(null); }}>
                         EXIT MINI GAME
                       </button>
                       <button className="btn-neon btn-purple" onClick={submitMiniGameSolution}>
-                        SUBMIT ANSWER
+                        CHECK CODE
                       </button>
                     </div>
                   </div>
@@ -1321,7 +1288,7 @@ function App() {
             <span className="success-icon">🏆</span>
             <h2 style={{ fontSize: '28px', color: 'var(--neon-amber)', marginBottom: '8px' }}>CHALLENGE CLEARED!</h2>
             <p style={{ color: 'var(--text-secondary)', fontSize: '15px' }}>
-              Your solution successfully resolved the curriculum challenge.
+              {playingMiniGame ? 'Your code produced the target result.' : 'Your solution successfully resolved the curriculum challenge.'}
             </p>
             
             {explanationText && (

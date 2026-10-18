@@ -1,7 +1,8 @@
 import express from 'express';
 import cors from 'cors';
 import { db, initDb } from './db.js';
-import { CHALLENGE_BANK, getChallengeForDate, MINI_GAME_BANK } from './challenges.js';
+import { CHALLENGE_BANK, getChallengeForDate } from './challenges.js';
+import { MINI_GAME_BANK, verifyMiniGameCode } from './miniGames.js';
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -103,7 +104,7 @@ app.get('/', (req, res) => {
 
 // Lets deployments confirm that the API supports per-language progress.
 app.get('/api/version', (req, res) => {
-  res.json({ apiVersion: 2, progressFormat: 'per-language' });
+  res.json({ apiVersion: 3, progressFormat: 'per-language', miniGamesFormat: 'code-writing' });
 });
 
 // 1. Get Daily / Progressive Challenge
@@ -334,14 +335,12 @@ app.get('/api/minigames', async (req, res) => {
       }
     }
 
-    // Filter to unlocked games only, strip answers
+    // Filter to unlocked games only, strip server-side solutions.
     const available = bank
       .filter(game => completedLevel >= game.unlockLevel)
       .map(game => {
         const clean = { ...game };
-        delete clean.bugLineIndex;
-        delete clean.correctOptionIndex;
-        delete clean.explanation;
+        delete clean.solution;
         clean.completed = completedMiniGameIds.includes(game.id);
         return clean;
       });
@@ -369,34 +368,36 @@ app.post('/api/minigames/verify', async (req, res) => {
   }
 
   try {
-    let success = false;
-    let explanation = game.explanation || "";
-
-    if (game.type === 'mini_bug_hunt') {
-      success = parseInt(submission) === game.bugLineIndex;
-    } else if (['mini_output_predict', 'mini_fill_in', 'mini_refactor'].includes(game.type)) {
-      success = parseInt(submission) === game.correctOptionIndex;
+    if (!userId) return res.status(400).json({ error: 'A user is required to play a mini game' });
+    const user = await db.getUser(userId);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    if ((user.completedChallenges?.[lang] || []).length < game.unlockLevel) {
+      return res.status(403).json({ error: 'This mini game is still locked' });
     }
 
-    // If correct and userId provided, record completion
-    if (success && userId) {
-      const user = await db.getUser(userId);
-      if (user) {
-        const existingMiniGames = user.miniGamesCompleted || { python: [], cpp: [] };
-        const langList = new Set(existingMiniGames[lang] || []);
-        langList.add(gameId);
-        await db.updateProgress(userId, {
-          miniGamesCompleted: {
-            ...existingMiniGames,
-            [lang]: Array.from(langList).sort()
-          },
-          // Award 10 bonus points per mini-game completion
-          score: (user.score || 0) + 10
-        });
+    const success = verifyMiniGameCode(game, submission);
+    if (!success) {
+      return res.json({ success: false, explanation: game.hint });
+    }
+
+    const existingMiniGames = user.miniGamesCompleted || { python: [], cpp: [] };
+    const alreadyCompleted = (existingMiniGames[lang] || []).includes(gameId);
+    let awardedPoints = 0;
+    if (!alreadyCompleted) {
+      const updated = await db.updateProgress(userId, {
+        miniGamesCompleted: {
+          ...existingMiniGames,
+          [lang]: [...(existingMiniGames[lang] || []), gameId]
+        },
+        score: (user.score || 0) + 10
+      });
+      if (!(updated?.miniGamesCompleted?.[lang] || []).includes(gameId)) {
+        throw new Error('Mini-game completion was not saved');
       }
+      awardedPoints = 10;
     }
 
-    res.json({ success, explanation });
+    res.json({ success: true, explanation: 'Your code completes the challenge.', output: game.expectedOutput, awardedPoints });
   } catch (err) {
     res.status(500).json({ error: "Failed to verify mini-game solution" });
   }
