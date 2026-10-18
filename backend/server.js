@@ -101,6 +101,11 @@ app.get('/', (req, res) => {
   `);
 });
 
+// Lets deployments confirm that the API supports per-language progress.
+app.get('/api/version', (req, res) => {
+  res.json({ apiVersion: 2, progressFormat: 'per-language' });
+});
+
 // 1. Get Daily / Progressive Challenge
 app.get('/api/challenges/daily', async (req, res) => {
   const { userId } = req.query;
@@ -270,14 +275,15 @@ app.get('/api/user/:id', async (req, res) => {
 
 // 8. Update Progress / Sync State
 app.post('/api/user/:id/progress', async (req, res) => {
-  const { score, streak, lastCompletedDate, completedChallenges, completionHistory, miniGamesCompleted } = req.body;
+  const { score, streak, recoveryLevelPasses, lastCompletedDate, completedChallenges, completionHistory, miniGamesCompleted } = req.body;
   try {
     const updated = await db.updateProgress(req.params.id, {
-      score, streak, lastCompletedDate, completedChallenges, completionHistory, miniGamesCompleted
+      score, streak, recoveryLevelPasses, lastCompletedDate, completedChallenges, completionHistory, miniGamesCompleted
     });
     if (!updated) return res.status(404).json({ error: "User not found" });
     res.json(userPayload(updated));
   } catch (err) {
+    console.error('Progress update failed:', err);
     res.status(500).json({ error: "Failed to update user progress" });
   }
 });

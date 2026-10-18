@@ -12,6 +12,7 @@ if (process.env.PERSISTENT_DIR && !fs.existsSync(DB_DIR)) {
 }
 
 const DB_PATH = path.join(DB_DIR, 'database.json');
+const PROGRESS_META_KEY = '__synapseMeta';
 
 // Initialize local database file if it doesn't exist
 if (!fs.existsSync(DB_PATH)) {
@@ -61,17 +62,22 @@ export async function initDb() {
 // Helpers to map between DB row (snake_case) and App Model (camelCase)
 function mapRowToUser(row) {
   if (!row) return null;
+  const completionHistory = row.completion_history || row.completionHistory || {};
+  const progressMeta = completionHistory[PROGRESS_META_KEY] || {};
 
   // Support both old flat array and new per-language object
   let completedChallenges = row.completed_challenges || row.completedChallenges || { python: [], cpp: [] };
   if (Array.isArray(completedChallenges)) {
-    // Migrate legacy flat array: treat all as python
-    completedChallenges = { python: completedChallenges, cpp: [] };
+    // Preserve C++ progress when migrating profiles from the original flat list.
+    completedChallenges = {
+      python: completedChallenges.filter(id => !id.startsWith('cpp_')),
+      cpp: completedChallenges.filter(id => id.startsWith('cpp_'))
+    };
   }
   if (!completedChallenges.python) completedChallenges.python = [];
   if (!completedChallenges.cpp) completedChallenges.cpp = [];
 
-  let miniGamesCompleted = row.mini_games_completed || row.miniGamesCompleted || { python: [], cpp: [] };
+  let miniGamesCompleted = progressMeta.miniGamesCompleted || row.mini_games_completed || row.miniGamesCompleted || { python: [], cpp: [] };
   if (Array.isArray(miniGamesCompleted)) {
     miniGamesCompleted = { python: miniGamesCompleted, cpp: [] };
   }
@@ -85,12 +91,12 @@ function mapRowToUser(row) {
     passwordHash: row.password_hash || row.passwordHash || null,
     score: typeof row.score === 'number' ? row.score : 0,
     streak: typeof row.streak === 'number' ? row.streak : 0,
-    recoveryLevelPasses: typeof (row.recovery_level_passes ?? row.recoveryLevelPasses) === 'number' 
-      ? (row.recovery_level_passes ?? row.recoveryLevelPasses) 
+    recoveryLevelPasses: typeof (progressMeta.recoveryLevelPasses ?? row.recovery_level_passes ?? row.recoveryLevelPasses) === 'number'
+      ? (progressMeta.recoveryLevelPasses ?? row.recovery_level_passes ?? row.recoveryLevelPasses)
       : 0,
     lastCompletedDate: row.last_completed_date || row.lastCompletedDate || null,
     completedChallenges,
-    completionHistory: row.completion_history || row.completionHistory || {},
+    completionHistory,
     miniGamesCompleted,
     preferredLanguage: row.preferred_language || row.preferredLanguage || 'python',
     canonicalId: row.canonical_id || row.canonicalId || row.id,
@@ -107,15 +113,31 @@ function mapUserToRow(user) {
     password_hash: user.passwordHash,
     score: user.score,
     streak: user.streak,
-    recovery_level_passes: user.recoveryLevelPasses ?? 0,
     last_completed_date: user.lastCompletedDate,
     completed_challenges: user.completedChallenges,
-    completion_history: user.completionHistory,
-    mini_games_completed: user.miniGamesCompleted,
+    completion_history: {
+      ...(user.completionHistory || {}),
+      [PROGRESS_META_KEY]: {
+        recoveryLevelPasses: user.recoveryLevelPasses ?? 0,
+        miniGamesCompleted: user.miniGamesCompleted || { python: [], cpp: [] }
+      }
+    },
     preferred_language: user.preferredLanguage,
     canonical_id: user.canonicalId,
     created_at: user.createdAt,
     updated_at: user.updatedAt
+  };
+}
+
+function mergeLanguageLists(first, second) {
+  const normalize = value => Array.isArray(value)
+    ? { python: value.filter(id => !id.startsWith('cpp_')), cpp: value.filter(id => id.startsWith('cpp_')) }
+    : (value || { python: [], cpp: [] });
+  const left = normalize(first);
+  const right = normalize(second);
+  return {
+    python: Array.from(new Set([...(left.python || []), ...(right.python || [])])).sort(),
+    cpp: Array.from(new Set([...(left.cpp || []), ...(right.cpp || [])])).sort()
   };
 }
 
@@ -131,11 +153,7 @@ function readData() {
 }
 
 function writeData(data) {
-  try {
-    fs.writeFileSync(DB_PATH, JSON.stringify(data, null, 2));
-  } catch (err) {
-    console.error("Database write error:", err);
-  }
+  fs.writeFileSync(DB_PATH, JSON.stringify(data, null, 2));
 }
 
 // Password hashing helper
@@ -261,7 +279,7 @@ export const db = {
       const data = readData();
       const canonicalId = resolveCanonicalIdLocal(userId, data.users);
       const user = data.users[canonicalId];
-      return user ? { ...user, resolvedId: canonicalId } : null;
+      return user ? { ...mapRowToUser(user), resolvedId: canonicalId } : null;
     }
   },
 
@@ -300,6 +318,8 @@ export const db = {
           ...incomingCpp
         ])).sort()
       };
+      const hasNewChallenge = incomingPy.some(id => !user.completedChallenges.python.includes(id)) ||
+        incomingCpp.some(id => !user.completedChallenges.cpp.includes(id));
 
       // Merge per-language mini-games completed
       const mergedMiniGames = {
@@ -312,36 +332,39 @@ export const db = {
           ...(progress.miniGamesCompleted?.cpp || [])
         ])).sort()
       };
+      const hasNewMiniGame = (progress.miniGamesCompleted?.python || []).some(id => !user.miniGamesCompleted.python.includes(id)) ||
+        (progress.miniGamesCompleted?.cpp || []).some(id => !user.miniGamesCompleted.cpp.includes(id));
 
       const updatePayload = {
         completed_challenges: mergedCompleted,
-        mini_games_completed: mergedMiniGames,
+        completion_history: {
+          ...(user.completionHistory || {}),
+          ...(hasNewChallenge ? progress.completionHistory || {} : {}),
+          [PROGRESS_META_KEY]: {
+            recoveryLevelPasses: hasNewChallenge && typeof progress.recoveryLevelPasses === 'number'
+              ? progress.recoveryLevelPasses : user.recoveryLevelPasses,
+            miniGamesCompleted: mergedMiniGames
+          }
+        },
         updated_at: new Date().toISOString()
       };
 
-      if (typeof progress.score === 'number') {
+      if ((hasNewChallenge || hasNewMiniGame) && typeof progress.score === 'number') {
         updatePayload.score = Math.max(user.score || 0, progress.score);
       }
-      if (typeof progress.streak === 'number') {
+      if (hasNewChallenge && typeof progress.streak === 'number') {
         updatePayload.streak = progress.streak;
       }
-      if (typeof progress.recoveryLevelPasses === 'number') {
-        updatePayload.recovery_level_passes = progress.recoveryLevelPasses;
-      }
-      if (progress.lastCompletedDate) {
+      if (hasNewChallenge && progress.lastCompletedDate) {
         if (!user.lastCompletedDate || progress.lastCompletedDate > user.lastCompletedDate) {
           updatePayload.last_completed_date = progress.lastCompletedDate;
         }
       }
-      if (progress.completionHistory) {
-        updatePayload.completion_history = {
-          ...(user.completionHistory || {}),
-          ...progress.completionHistory
-        };
-      }
 
-      await supabase.from('users').update(updatePayload).eq('id', canonicalId);
-      const { data: updatedRow } = await supabase.from('users').select('*').eq('id', canonicalId).maybeSingle();
+      const { error: updateError } = await supabase.from('users').update(updatePayload).eq('id', canonicalId);
+      if (updateError) throw new Error(`Database progress update failed: ${updateError.message}`);
+      const { data: updatedRow, error: readError } = await supabase.from('users').select('*').eq('id', canonicalId).maybeSingle();
+      if (readError || !updatedRow) throw new Error(`Could not confirm saved progress: ${readError?.message || 'user not found'}`);
       return { ...mapRowToUser(updatedRow), resolvedId: canonicalId };
 
     } else {
@@ -352,7 +375,10 @@ export const db = {
 
       // Ensure legacy users get the right shape
       if (Array.isArray(user.completedChallenges)) {
-        user.completedChallenges = { python: user.completedChallenges, cpp: [] };
+        user.completedChallenges = {
+          python: user.completedChallenges.filter(id => !id.startsWith('cpp_')),
+          cpp: user.completedChallenges.filter(id => id.startsWith('cpp_'))
+        };
       }
       if (!user.completedChallenges) user.completedChallenges = { python: [], cpp: [] };
       if (!user.miniGamesCompleted) user.miniGamesCompleted = { python: [], cpp: [] };
@@ -368,6 +394,10 @@ export const db = {
         incomingPy = progress.completedChallenges.python || [];
         incomingCpp = progress.completedChallenges.cpp || [];
       }
+      const hasNewChallenge = incomingPy.some(id => !(user.completedChallenges.python || []).includes(id)) ||
+        incomingCpp.some(id => !(user.completedChallenges.cpp || []).includes(id));
+      const hasNewMiniGame = (progress.miniGamesCompleted?.python || []).some(id => !(user.miniGamesCompleted.python || []).includes(id)) ||
+        (progress.miniGamesCompleted?.cpp || []).some(id => !(user.miniGamesCompleted.cpp || []).includes(id));
 
       user.completedChallenges = {
         python: Array.from(new Set([
@@ -392,21 +422,21 @@ export const db = {
         ])).sort()
       };
 
-      if (typeof progress.score === 'number') {
+      if ((hasNewChallenge || hasNewMiniGame) && typeof progress.score === 'number') {
         user.score = Math.max(user.score, progress.score);
       }
-      if (typeof progress.streak === 'number') {
+      if (hasNewChallenge && typeof progress.streak === 'number') {
         user.streak = progress.streak;
       }
-      if (typeof progress.recoveryLevelPasses === 'number') {
+      if (hasNewChallenge && typeof progress.recoveryLevelPasses === 'number') {
         user.recoveryLevelPasses = progress.recoveryLevelPasses;
       }
-      if (progress.lastCompletedDate) {
+      if (hasNewChallenge && progress.lastCompletedDate) {
         if (!user.lastCompletedDate || progress.lastCompletedDate > user.lastCompletedDate) {
           user.lastCompletedDate = progress.lastCompletedDate;
         }
       }
-      if (progress.completionHistory) {
+      if (hasNewChallenge && progress.completionHistory) {
         user.completionHistory = {
           ...user.completionHistory,
           ...progress.completionHistory
@@ -451,14 +481,16 @@ export const db = {
       const primary = mapRowToUser(primaryRow);
       const secondary = mapRowToUser(secondaryRow);
 
-      const mergedCompleted = Array.from(new Set([
-        ...(primary.completedChallenges || []),
-        ...(secondary.completedChallenges || [])
-      ])).sort();
+      const mergedCompleted = mergeLanguageLists(primary.completedChallenges, secondary.completedChallenges);
+      const mergedMiniGames = mergeLanguageLists(primary.miniGamesCompleted, secondary.miniGamesCompleted);
 
       const mergedHistory = {
         ...(secondary.completionHistory || {}),
-        ...(primary.completionHistory || {})
+        ...(primary.completionHistory || {}),
+        [PROGRESS_META_KEY]: {
+          recoveryLevelPasses: Math.max(primary.recoveryLevelPasses || 0, secondary.recoveryLevelPasses || 0),
+          miniGamesCompleted: mergedMiniGames
+        }
       };
 
       const mergedScore = Math.max(primary.score || 0, secondary.score || 0);
@@ -468,7 +500,7 @@ export const db = {
         : (primary.lastCompletedDate || secondary.lastCompletedDate);
 
       // Update primary
-      await supabase.from('users').update({
+      const { error: mergeError } = await supabase.from('users').update({
         completed_challenges: mergedCompleted,
         completion_history: mergedHistory,
         score: mergedScore,
@@ -476,6 +508,7 @@ export const db = {
         last_completed_date: mergedLastCompleted,
         updated_at: new Date().toISOString()
       }).eq('id', targetCanonicalId);
+      if (mergeError) throw new Error(`Could not merge progress: ${mergeError.message}`);
 
       // Update secondary to point to targetCanonicalId
       await supabase.from('users').update({
@@ -512,10 +545,8 @@ export const db = {
         throw new Error("Active device profile session not found on server. Please restart/reload app.");
       }
 
-      const mergedCompleted = Array.from(new Set([
-        ...primary.completedChallenges,
-        ...secondary.completedChallenges
-      ])).sort();
+      const mergedCompleted = mergeLanguageLists(primary.completedChallenges, secondary.completedChallenges);
+      const mergedMiniGames = mergeLanguageLists(primary.miniGamesCompleted, secondary.miniGamesCompleted);
 
       const mergedHistory = {
         ...secondary.completionHistory,
@@ -529,6 +560,8 @@ export const db = {
         : (primary.lastCompletedDate || secondary.lastCompletedDate);
 
       primary.completedChallenges = mergedCompleted;
+      primary.miniGamesCompleted = mergedMiniGames;
+      primary.recoveryLevelPasses = Math.max(primary.recoveryLevelPasses || 0, secondary.recoveryLevelPasses || 0);
       primary.completionHistory = mergedHistory;
       primary.score = mergedScore;
       primary.streak = mergedStreak;

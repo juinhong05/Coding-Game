@@ -72,6 +72,8 @@ npm run dev
   - **Key**: `SUPABASE_URL` | **Value**: `https://your-project-id.supabase.co`
   - **Key**: `SUPABASE_KEY` | **Value**: `your-supabase-service-role-or-anon-key`
 * *Note: If Supabase variables are not set, the server will gracefully fallback to local file `database.json` storage.*
+* Deploy the **backend** after every backend change. A Vercel web deployment alone does not update the Render API. After deployment, `https://YOUR-RENDER-BACKEND-URL.onrender.com/api/version` should return `apiVersion: 2` and `progressFormat: "per-language"`.
+* Level completion is only shown as successful after the API confirms it was saved. The API awards points only for a newly completed level or mini-game, so repeat submissions cannot raise the score.
 
 #### Supabase Database Table Setup (Run in Supabase SQL Editor):
 ```sql
@@ -84,7 +86,7 @@ create table if not exists users (
   streak integer default 0,
   recovery_level_passes integer default 0,
   last_completed_date text,
-  completed_challenges jsonb default '[]'::jsonb,
+  completed_challenges jsonb default '{"python":[],"cpp":[]}'::jsonb,
   completion_history jsonb default '{}'::jsonb,
   preferred_language text default 'python',
   canonical_id text,
@@ -92,7 +94,8 @@ create table if not exists users (
   updated_at text default (now() at time zone 'utc')::text
 );
 
--- Add this column when upgrading an existing users table:
+-- Optional for older deployments: recovery and mini-game progress are also
+-- stored in completion_history so an existing users table works without new columns.
 alter table users add column if not exists recovery_level_passes integer default 0;
 
 create index if not exists idx_users_sync_code on users(sync_code);

@@ -325,6 +325,7 @@ function App() {
   const submitSolution = async () => {
     if (hasSubmitted) return;
     setHasSubmitted(true);
+    try {
 
     let submissionSuccess = false;
     let explanation = '';
@@ -382,8 +383,6 @@ function App() {
     }
 
     if (submissionSuccess) {
-      setIsSuccess(true);
-      
       const basePoints = 100;
       const timeBonus = Math.floor(timer / 6); // Up to 100 extra points
       
@@ -447,7 +446,15 @@ function App() {
         body: JSON.stringify(progressUpdate)
       });
       const updatedUser = await resUpdate.json();
+      if (!resUpdate.ok) throw new Error(updatedUser.error || 'Could not save your progress.');
+      const savedCompletions = Array.isArray(updatedUser.completedChallenges)
+        ? updatedUser.completedChallenges
+        : updatedUser.completedChallenges?.[lang];
+      if (!Array.isArray(savedCompletions) || !savedCompletions.includes(challenge.id)) {
+        throw new Error('The server did not save this level. Your score was not awarded. Please try again after the backend is updated.');
+      }
       setUser(updatedUser);
+      setIsSuccess(true);
 
       setScoreBreakdown({
         base: basePoints,
@@ -461,6 +468,11 @@ function App() {
       setIsSuccess(false);
       alert("Incorrect solution. Keep debugging!");
       setHasSubmitted(false);
+    }
+    } catch (err) {
+      setIsSuccess(false);
+      setHasSubmitted(false);
+      alert(err.message || 'Could not save your progress. Please try again.');
     }
   };
 
