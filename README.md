@@ -21,6 +21,9 @@ Play the live web application here: **[https://coding-game-theta.vercel.app/](ht
   - **Topic 7**: String Concatenation (combining string outputs)
   - **Topic 8**: Logical Operators (evaluating compound conditions using `and`/`or`/`&&`/`||`)
   - **Topic 9**: Function Returns (defining functions and returning results)
+* **Per-language progression and scoring**: Python and C++ levels advance independently. A completed level is recorded once, so replaying a level does not award its score again.
+* **Streak recovery**: Missing one day turns the streak indicator gray; complete two levels to recover the streak. Missing two or more days resets it.
+* **Forgot password**: Reset an account password with its username and six-character device sync code.
 * **Concept Tutorials**: Integrated sidebar guides explaining active level logic, formatting rules, and code patterns.
 * **Cloud Progress Sync**: Secure guest stats (Scores & Streaks) with a cloud login account to play seamlessly across Web browser clients and native Android Mobile clients.
 
@@ -79,6 +82,7 @@ create table if not exists users (
   password_hash text,
   score integer default 0,
   streak integer default 0,
+  recovery_level_passes integer default 0,
   last_completed_date text,
   completed_challenges jsonb default '[]'::jsonb,
   completion_history jsonb default '{}'::jsonb,
@@ -87,6 +91,9 @@ create table if not exists users (
   created_at text default (now() at time zone 'utc')::text,
   updated_at text default (now() at time zone 'utc')::text
 );
+
+-- Add this column when upgrading an existing users table:
+alter table users add column if not exists recovery_level_passes integer default 0;
 
 create index if not exists idx_users_sync_code on users(sync_code);
 create index if not exists idx_users_canonical_id on users(canonical_id);
