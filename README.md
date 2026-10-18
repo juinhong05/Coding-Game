@@ -58,8 +58,11 @@ npm run dev
 
 ### 3. Run the Android Client
 1. Open **Android Studio**.
-2. Select **Open Project** and choose the `android/` directory.
-3. Select an emulator or connected phone, and press **Run** (`Shift + F10`).
+2. Select **Open** and choose the repository's `android/` directory (the folder containing `settings.gradle`), not the repository root.
+3. Let Gradle sync finish. The Gradle 8.2 wrapper is included in the repository; set **Gradle JDK** to Android Studio's embedded JDK if Studio asks. Install Android SDK Platform 34 in SDK Manager if it is missing.
+4. Select an emulator or connected phone, then press **Run** (`Shift + F10`).
+
+If Studio says it cannot find `org.gradle.wrapper.GradleWrapperMain`, update your checkout: older revisions omitted `android/gradle/wrapper/gradle-wrapper.jar`. On Windows, `android\gradlew.bat assembleDebug` checks that the project can build.
 
 ---
 
