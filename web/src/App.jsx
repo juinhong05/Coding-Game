@@ -33,7 +33,9 @@ function App() {
   // Credentials / Auth form state
   const [usernameInput, setUsernameInput] = useState('');
   const [passwordInput, setPasswordInput] = useState('');
-  const [isRegisterMode, setIsRegisterMode] = useState(false);
+  const [authMode, setAuthMode] = useState('login'); // 'login' | 'register' | 'forgot'
+  const [forgotSyncCode, setForgotSyncCode] = useState('');
+  const [newPasswordInput, setNewPasswordInput] = useState('');
   const [authError, setAuthError] = useState('');
   const [authSuccess, setAuthSuccess] = useState('');
   
@@ -83,9 +85,13 @@ function App() {
     fetchLeaderboard();
   }, []);
 
-  const fetchChallenge = async (userId) => {
+  const fetchChallenge = async (userId, lang) => {
     try {
-      const url = userId ? `${API_BASE}/challenges/daily?userId=${userId}` : `${API_BASE}/challenges/daily`;
+      const activeLanguage = lang || user?.preferredLanguage;
+      const params = new URLSearchParams();
+      if (userId) params.set('userId', userId);
+      if (activeLanguage) params.set('language', activeLanguage);
+      const url = `${API_BASE}/challenges/daily?${params.toString()}`;
       const res = await fetch(url);
       const data = await res.json();
       setChallenge(data);
@@ -318,6 +324,7 @@ function App() {
   // Submit Challenge Solution
   const submitSolution = async () => {
     if (hasSubmitted) return;
+    setHasSubmitted(true);
 
     let submissionSuccess = false;
     let explanation = '';
@@ -339,6 +346,7 @@ function App() {
     } else if (challenge.type === 'bug_hunt') {
       if (selectedBugIndex === null) {
         alert("Please select the line containing the bug first.");
+        setHasSubmitted(false);
         return;
       }
       const res = await fetch(`${API_BASE}/challenges/verify`, {
@@ -356,6 +364,7 @@ function App() {
     } else if (challenge.type === 'multiple_choice') {
       if (selectedChoiceIndex === null) {
         alert("Please select an option first.");
+        setHasSubmitted(false);
         return;
       }
       const res = await fetch(`${API_BASE}/challenges/verify`, {
@@ -372,8 +381,6 @@ function App() {
       setExplanationText(explanation);
     }
 
-    setHasSubmitted(true);
-    
     if (submissionSuccess) {
       setIsSuccess(true);
       
@@ -386,7 +393,23 @@ function App() {
 
       const newScore = user.score + totalScoreGained;
       const todayStr = new Date().toISOString().split('T')[0];
-      const newStreak = calculateNewStreak(user.lastCompletedDate, todayStr, user.streak);
+      const gapDays = daysBetween(user.lastCompletedDate, todayStr);
+      let recoveryLevelPasses = user.recoveryLevelPasses || 0;
+      let newStreak = user.streak || 0;
+      if (!user.lastCompletedDate || gapDays >= 3) {
+        newStreak = 1;
+        recoveryLevelPasses = 0;
+      } else if (gapDays === 2) {
+        recoveryLevelPasses = 1;
+      } else if (recoveryLevelPasses > 0) {
+        recoveryLevelPasses += 1;
+        if (recoveryLevelPasses >= 2) {
+          newStreak += 1;
+          recoveryLevelPasses = 0;
+        }
+      } else if (gapDays === 1) {
+        newStreak += 1;
+      }
 
       const lang = user.preferredLanguage || 'python';
       const existingLangCompleted = Array.isArray(user.completedChallenges)
@@ -401,6 +424,7 @@ function App() {
       const progressUpdate = {
         score: newScore,
         streak: newStreak,
+        recoveryLevelPasses,
         lastCompletedDate: todayStr,
         completedChallenges: {
           ...currentCompletedMap,
@@ -440,22 +464,9 @@ function App() {
     }
   };
 
-  const calculateNewStreak = (lastCompleted, today, currentStreak) => {
-    if (!lastCompleted) return 1;
-    
-    const lastDate = new Date(lastCompleted);
-    const currentDate = new Date(today);
-    
-    const diffTime = Math.abs(currentDate - lastDate);
-    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-    
-    if (diffDays === 1) {
-      return currentStreak + 1;
-    } else if (diffDays > 1) {
-      return 1; // Streak reset
-    }
-    return currentStreak;
-  };
+  const daysBetween = (from, to) => from
+    ? Math.floor((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86400000)
+    : null;
 
   // Auth: User Account Register
   const handleAuthRegister = async (e) => {
@@ -482,7 +493,7 @@ function App() {
       setAuthSuccess(`Account created! Welome, ${data.username}`);
       setUsernameInput('');
       setPasswordInput('');
-      fetchChallenge(data.id);
+      fetchChallenge(data.id, data.preferredLanguage);
       fetchLeaderboard();
     } catch (err) {
       setAuthError(err.message);
@@ -513,11 +524,30 @@ function App() {
       setAuthSuccess(`Logged in as ${data.username}`);
       setUsernameInput('');
       setPasswordInput('');
-      fetchChallenge(data.id);
+      fetchChallenge(data.id, data.preferredLanguage);
       fetchLeaderboard();
     } catch (err) {
       setAuthError(err.message);
     }
+  };
+
+  const handleForgotPassword = async (e) => {
+    e.preventDefault();
+    setAuthError('');
+    setAuthSuccess('');
+    try {
+      const res = await fetch(`${API_BASE}/user/forgot-password`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: usernameInput, syncCode: forgotSyncCode, newPassword: newPasswordInput })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Password reset failed');
+      setAuthMode('login');
+      setAuthSuccess('Password reset. Sign in with your new password.');
+      setPasswordInput('');
+      setNewPasswordInput('');
+      setForgotSyncCode('');
+    } catch (err) { setAuthError(err.message); }
   };
 
   // Logout handler
@@ -529,7 +559,7 @@ function App() {
       const data = await res.json();
       localStorage.setItem('synapse_userId', data.id);
       setUser(data);
-      fetchChallenge(data.id);
+      fetchChallenge(data.id, data.preferredLanguage);
       setAuthSuccess('Logged out successfully.');
     } catch (err) {
       console.error("Logout register error:", err);
@@ -547,7 +577,7 @@ function App() {
       });
       const data = await res.json();
       setUser(data);
-      fetchChallenge(data.id);
+      fetchChallenge(data.id, data.preferredLanguage);
     } catch (err) {
       console.error("Failed to update language:", err);
     }
@@ -650,6 +680,10 @@ function App() {
     : (user.completedChallenges?.[activeLang] || []);
   const currentLevelIndex = activeCompletedList.length + 1;
   const isCurriculumCompleted = activeCompletedList.includes(challenge.id);
+  const daysSinceCompletion = daysBetween(user.lastCompletedDate, new Date().toISOString().slice(0, 10));
+  const streakExpired = daysSinceCompletion !== null && daysSinceCompletion >= 3;
+  const streakRecovering = !streakExpired && ((user.recoveryLevelPasses || 0) > 0 || daysSinceCompletion === 2);
+  const visibleStreak = streakExpired ? 0 : user.streak;
 
   return (
     <>
@@ -665,8 +699,8 @@ function App() {
               <span>{user.score.toLocaleString()} PTS</span>
             </div>
             <div className="stat-capsule streak">
-              <span>🔥</span>
-              <span>{user.streak} DAYS</span>
+              <span style={{ filter: streakRecovering || streakExpired ? 'grayscale(1)' : 'none' }}>🔥</span>
+              <span>{visibleStreak} DAYS{streakRecovering ? ' · PASS 2 LEVELS TO RECOVER' : ''}</span>
             </div>
             <span className="profile-badge">{user.nickname}</span>
           </div>
@@ -756,8 +790,8 @@ function App() {
                   </div>
 
                   <div className="glass-card small-stat-card">
-                    <div className="small-stat-val streak">{user.streak} 🔥</div>
-                    <div className="small-stat-lbl">CURRENT STREAK</div>
+                    <div className="small-stat-val streak" style={{ filter: streakRecovering || streakExpired ? 'grayscale(1)' : 'none' }}>{visibleStreak} 🔥</div>
+                    <div className="small-stat-lbl">{streakRecovering ? 'PASS 2 LEVELS TO RECOVER' : 'CURRENT STREAK'}</div>
                   </div>
 
                   <div className="glass-card tutorial-card">
@@ -931,7 +965,7 @@ function App() {
                       <p style={{ color: 'var(--text-secondary)', fontSize: '14px' }}>
                         You are currently playing on a <strong>Guest profile</strong>. Secure your progress (Score: {user.score}, Level: {currentLevelIndex}) by creating an account.
                       </p>
-                      <form onSubmit={isRegisterMode ? handleAuthRegister : handleAuthLogin} style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '10px' }}>
+                      <form onSubmit={authMode === 'register' ? handleAuthRegister : authMode === 'forgot' ? handleForgotPassword : handleAuthLogin} style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '10px' }}>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                           <label style={{ fontSize: '11px', fontWeight: 'bold', color: 'var(--text-secondary)' }}>USERNAME</label>
                           <input 
@@ -943,7 +977,7 @@ function App() {
                             onChange={(e) => setUsernameInput(e.target.value)}
                           />
                         </div>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                        {authMode !== 'forgot' && <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                           <label style={{ fontSize: '11px', fontWeight: 'bold', color: 'var(--text-secondary)' }}>PASSWORD</label>
                           <input 
                             type="password" 
@@ -953,10 +987,21 @@ function App() {
                             value={passwordInput}
                             onChange={(e) => setPasswordInput(e.target.value)}
                           />
-                        </div>
+                        </div>}
+
+                        {authMode === 'forgot' && <>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                            <label style={{ fontSize: '11px', fontWeight: 'bold', color: 'var(--text-secondary)' }}>ACCOUNT SYNC CODE</label>
+                            <input className="sync-input" placeholder="6-character sync code" value={forgotSyncCode} onChange={e => setForgotSyncCode(e.target.value.toUpperCase())} maxLength={6} />
+                          </div>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                            <label style={{ fontSize: '11px', fontWeight: 'bold', color: 'var(--text-secondary)' }}>NEW PASSWORD</label>
+                            <input type="password" className="sync-input" placeholder="At least 4 characters" value={newPasswordInput} onChange={e => setNewPasswordInput(e.target.value)} />
+                          </div>
+                        </>}
 
                         <button type="submit" className="btn-neon btn-purple" style={{ marginTop: '8px' }}>
-                          {isRegisterMode ? 'CREATE CLOUD ACCOUNT' : 'SIGN IN / SYNC'}
+                          {authMode === 'forgot' ? 'RESET PASSWORD' : authMode === 'register' ? 'CREATE CLOUD ACCOUNT' : 'SIGN IN / SYNC'}
                         </button>
 
                         <div style={{ textAlign: 'center', marginTop: '8px' }}>
@@ -964,15 +1009,16 @@ function App() {
                             type="button" 
                             style={{ background: 'transparent', border: 'none', color: 'var(--neon-cyan)', fontSize: '13px', cursor: 'pointer', fontWeight: 600 }}
                             onClick={() => {
-                              setIsRegisterMode(!isRegisterMode);
+                              setAuthMode(authMode === 'forgot' ? 'login' : authMode === 'login' ? 'register' : 'login');
                               setAuthError('');
                               setAuthSuccess('');
                             }}
                           >
-                            {isRegisterMode ? 'Already have an account? Sign In' : 'Need an account? Register Here'}
+                            {authMode === 'forgot' ? 'Back to Sign In' : authMode === 'register' ? 'Already have an account? Sign In' : 'Need an account? Register Here'}
                           </button>
                         </div>
                       </form>
+                      {authMode === 'login' && <button type="button" style={{ background: 'transparent', border: 'none', color: 'var(--neon-cyan)', fontSize: '13px', cursor: 'pointer', marginTop: '8px' }} onClick={() => { setAuthMode('forgot'); setAuthError(''); setAuthSuccess(''); }}>Forgot password?</button>}
                     </>
                   )}
 

@@ -85,6 +85,9 @@ function mapRowToUser(row) {
     passwordHash: row.password_hash || row.passwordHash || null,
     score: typeof row.score === 'number' ? row.score : 0,
     streak: typeof row.streak === 'number' ? row.streak : 0,
+    recoveryLevelPasses: typeof (row.recovery_level_passes ?? row.recoveryLevelPasses) === 'number' 
+      ? (row.recovery_level_passes ?? row.recoveryLevelPasses) 
+      : 0,
     lastCompletedDate: row.last_completed_date || row.lastCompletedDate || null,
     completedChallenges,
     completionHistory: row.completion_history || row.completionHistory || {},
@@ -104,6 +107,7 @@ function mapUserToRow(user) {
     password_hash: user.passwordHash,
     score: user.score,
     streak: user.streak,
+    recovery_level_passes: user.recoveryLevelPasses ?? 0,
     last_completed_date: user.lastCompletedDate,
     completed_challenges: user.completedChallenges,
     completion_history: user.completionHistory,
@@ -216,6 +220,7 @@ export const db = {
       passwordHash: null,
       score: 0,
       streak: 0,
+      recoveryLevelPasses: 0,
       lastCompletedDate: null,
       completedChallenges: { python: [], cpp: [] },
       completionHistory: {},
@@ -318,7 +323,10 @@ export const db = {
         updatePayload.score = Math.max(user.score || 0, progress.score);
       }
       if (typeof progress.streak === 'number') {
-        updatePayload.streak = Math.max(user.streak || 0, progress.streak);
+        updatePayload.streak = progress.streak;
+      }
+      if (typeof progress.recoveryLevelPasses === 'number') {
+        updatePayload.recovery_level_passes = progress.recoveryLevelPasses;
       }
       if (progress.lastCompletedDate) {
         if (!user.lastCompletedDate || progress.lastCompletedDate > user.lastCompletedDate) {
@@ -388,7 +396,10 @@ export const db = {
         user.score = Math.max(user.score, progress.score);
       }
       if (typeof progress.streak === 'number') {
-        user.streak = Math.max(user.streak, progress.streak);
+        user.streak = progress.streak;
+      }
+      if (typeof progress.recoveryLevelPasses === 'number') {
+        user.recoveryLevelPasses = progress.recoveryLevelPasses;
       }
       if (progress.lastCompletedDate) {
         if (!user.lastCompletedDate || progress.lastCompletedDate > user.lastCompletedDate) {
@@ -666,6 +677,62 @@ export const db = {
         ...data.users[canonicalId],
         resolvedId: canonicalId
       };
+    }
+  },
+
+  // Reset password using username and account's 6-character sync code
+  async resetPassword(username, syncCode, newPassword) {
+    const lowerUsername = username.trim().toLowerCase();
+    const cleanSyncCode = syncCode.trim().toUpperCase();
+    const newHash = hashPassword(newPassword);
+
+    if (isSupabase) {
+      const { data: userRow } = await supabase
+        .from('users')
+        .select('*')
+        .ilike('username', lowerUsername)
+        .maybeSingle();
+
+      if (!userRow) {
+        throw new Error("User account not found");
+      }
+
+      const canonicalId = await resolveCanonicalIdSupabase(userRow.id);
+      const { data: canonicalRow } = await supabase.from('users').select('*').eq('id', canonicalId).maybeSingle();
+      const user = mapRowToUser(canonicalRow);
+
+      if (!user || user.syncCode.toUpperCase() !== cleanSyncCode) {
+        throw new Error("Invalid Sync Code verification for this username");
+      }
+
+      await supabase.from('users').update({
+        password_hash: newHash,
+        updated_at: new Date().toISOString()
+      }).eq('id', canonicalId);
+
+      const { data: updated } = await supabase.from('users').select('*').eq('id', canonicalId).maybeSingle();
+      return { ...mapRowToUser(updated), resolvedId: canonicalId };
+    } else {
+      const data = readData();
+      const userEntry = Object.values(data.users).find(
+        u => u.username && u.username.toLowerCase() === lowerUsername
+      );
+
+      if (!userEntry) {
+        throw new Error("User account not found");
+      }
+
+      const canonicalId = resolveCanonicalIdLocal(userEntry.id, data.users);
+      const targetUser = data.users[canonicalId];
+
+      if (!targetUser || targetUser.syncCode.toUpperCase() !== cleanSyncCode) {
+        throw new Error("Invalid Sync Code verification for this username");
+      }
+
+      targetUser.passwordHash = newHash;
+      targetUser.updatedAt = new Date().toISOString();
+      writeData(data);
+      return { ...targetUser, resolvedId: canonicalId };
     }
   },
 

@@ -30,6 +30,7 @@ function userPayload(user) {
     nickname: getNickname(user),
     score: user.score,
     streak: user.streak,
+    recoveryLevelPasses: user.recoveryLevelPasses ?? 0,
     preferredLanguage: user.preferredLanguage,
     lastCompletedDate: user.lastCompletedDate,
     completedChallenges: user.completedChallenges,
@@ -220,6 +221,24 @@ app.post('/api/user/login', async (req, res) => {
     res.status(200).json(userPayload(user));
   } catch (err) {
     res.status(401).json({ error: err.message || "Invalid credentials" });
+  }
+});
+
+// 5b. Forgot / Reset Password
+app.post('/api/user/forgot-password', async (req, res) => {
+  const { username, syncCode, newPassword } = req.body;
+  if (!username || !syncCode || !newPassword) {
+    return res.status(400).json({ error: "Username, syncCode, and newPassword are required" });
+  }
+  if (newPassword.length < 4) {
+    return res.status(400).json({ error: "New password must be at least 4 characters long" });
+  }
+
+  try {
+    const updated = await db.resetPassword(username, syncCode, newPassword);
+    res.status(200).json(userPayload(updated));
+  } catch (err) {
+    res.status(400).json({ error: err.message || "Password reset failed" });
   }
 });
 
