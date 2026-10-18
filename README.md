@@ -64,6 +64,8 @@ npm run dev
 
 If Studio says it cannot find `org.gradle.wrapper.GradleWrapperMain`, update your checkout: older revisions omitted `android/gradle/wrapper/gradle-wrapper.jar`. On Windows, `android\gradlew.bat assembleDebug` checks that the project can build.
 
+If the Android app opens but shows `Expected BEGIN_ARRAY but was BEGIN_OBJECT at $.completedChallenges`, rebuild and reinstall it from the latest source. The API now returns separate Python and C++ completion lists; older APKs expect a flat list. The current Android client reads the per-language progress, preserves completion metadata, and only creates a new guest when the saved profile genuinely returns 404.
+
 ---
 
 ## ☁️ Production Deployment Configuration

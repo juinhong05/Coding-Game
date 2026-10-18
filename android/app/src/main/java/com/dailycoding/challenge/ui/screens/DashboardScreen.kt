@@ -31,8 +31,9 @@ fun DashboardScreen(
     onLanguageSelected: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val isCompletedToday = user.completedChallenges.contains(challenge.id)
-    val currentLevelIndex = user.completedChallenges.size + 1
+    val languageProgress = user.completedChallenges.forLanguage(user.preferredLanguage)
+    val isCompletedToday = challenge.id in languageProgress
+    val currentLevelIndex = languageProgress.size + 1
 
     Column(
         modifier = modifier

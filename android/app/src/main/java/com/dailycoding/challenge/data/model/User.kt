@@ -1,5 +1,18 @@
 package com.dailycoding.challenge.data.model
 
+import com.google.gson.JsonObject
+
+data class CompletedChallenges(
+    val python: List<String> = emptyList(),
+    val cpp: List<String> = emptyList()
+) {
+    fun forLanguage(language: String): List<String> = if (language == "cpp") cpp else python
+
+    fun withCompleted(language: String, challengeId: String): CompletedChallenges =
+        if (language == "cpp") copy(cpp = (cpp + challengeId).distinct())
+        else copy(python = (python + challengeId).distinct())
+}
+
 data class User(
     val id: String,
     val syncCode: String,
@@ -7,10 +20,11 @@ data class User(
     val nickname: String,
     val score: Int,
     val streak: Int,
+    val recoveryLevelPasses: Int,
     val preferredLanguage: String,
     val lastCompletedDate: String?,
-    val completedChallenges: List<String>,
-    val completionHistory: Map<String, CompletionDetail>
+    val completedChallenges: CompletedChallenges,
+    val completionHistory: JsonObject
 )
 
 data class CompletionDetail(
@@ -22,9 +36,10 @@ data class CompletionDetail(
 data class ProgressUpdateRequest(
     val score: Int,
     val streak: Int,
+    val recoveryLevelPasses: Int,
     val lastCompletedDate: String?,
-    val completedChallenges: List<String>,
-    val completionHistory: Map<String, CompletionDetail>
+    val completedChallenges: CompletedChallenges,
+    val completionHistory: JsonObject
 )
 
 data class LinkRequest(

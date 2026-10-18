@@ -18,11 +18,13 @@ import com.dailycoding.challenge.data.api.RetrofitInstance
 import com.dailycoding.challenge.data.model.*
 import com.dailycoding.challenge.ui.screens.*
 import com.dailycoding.challenge.ui.theme.*
+import com.google.gson.Gson
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import kotlinx.coroutines.launch
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
+import retrofit2.HttpException
 
 class MainActivity : ComponentActivity() {
 
@@ -60,9 +62,13 @@ class MainActivity : ComponentActivity() {
                             try {
                                 RetrofitInstance.api.getUser(savedUserId)
                             } catch (e: Exception) {
-                                val freshUser = RetrofitInstance.api.registerUser()
-                                sharedPref.edit().putString("user_id", freshUser.id).apply()
-                                freshUser
+                                if (e is HttpException && e.code() == 404) {
+                                    val freshUser = RetrofitInstance.api.registerUser()
+                                    sharedPref.edit().putString("user_id", freshUser.id).apply()
+                                    freshUser
+                                } else {
+                                    throw e
+                                }
                             }
                         } else {
                             val freshUser = RetrofitInstance.api.registerUser()
@@ -81,7 +87,7 @@ class MainActivity : ComponentActivity() {
 
                         isLoading = false
                     } catch (e: Exception) {
-                        networkError = "Network offline or backend offline: ${e.localizedMessage}"
+                        networkError = "Could not load your game: ${e.localizedMessage}"
                         isLoading = false
                     }
                 }
@@ -208,6 +214,8 @@ class MainActivity : ComponentActivity() {
                     lifecycleScope.launch {
                         val user = userState ?: return@launch
                         val challenge = challengeState ?: return@launch
+                        val language = user.preferredLanguage
+                        if (challenge.id in user.completedChallenges.forLanguage(language)) return@launch
                         
                         try {
                             var isCorrect = false
@@ -238,21 +246,30 @@ class MainActivity : ComponentActivity() {
                                 val updatedScore = user.score + totalScoreEarned
                                 val todayStr = LocalDate.now().format(DateTimeFormatter.ISO_LOCAL_DATE)
                                 
-                                val newStreak = calculateNewStreak(user.lastCompletedDate, todayStr, user.streak)
+                                val (newStreak, recoveryLevelPasses) = calculateStreakState(
+                                    user.lastCompletedDate, todayStr, user.streak, user.recoveryLevelPasses
+                                )
+                                val updatedHistory = user.completionHistory.deepCopy().apply {
+                                    add(challenge.id, Gson().toJsonTree(CompletionDetail(
+                                        scoreEarned = totalScoreEarned,
+                                        timeSpentSeconds = 120,
+                                        completedAt = java.time.Instant.now().toString()
+                                    )))
+                                }
 
                                 val progressRequest = ProgressUpdateRequest(
                                     score = updatedScore,
                                     streak = newStreak,
+                                    recoveryLevelPasses = recoveryLevelPasses,
                                     lastCompletedDate = todayStr,
-                                    completedChallenges = user.completedChallenges + challenge.id,
-                                    completionHistory = user.completionHistory + (challenge.id to CompletionDetail(
-                                        scoreEarned = totalScoreEarned,
-                                        timeSpentSeconds = 120,
-                                        completedAt = java.time.Instant.now().toString()
-                                    ))
+                                    completedChallenges = user.completedChallenges.withCompleted(language, challenge.id),
+                                    completionHistory = updatedHistory
                                 )
 
                                 val updatedUser = RetrofitInstance.api.updateProgress(user.id, progressRequest)
+                                if (challenge.id !in updatedUser.completedChallenges.forLanguage(language)) {
+                                    throw IllegalStateException("The server did not save this level. Please try again.")
+                                }
                                 userState = updatedUser
                                 
                                 scoreDetail = mapOf(
@@ -266,7 +283,7 @@ class MainActivity : ComponentActivity() {
                                 // Incorrect solution
                             }
                         } catch (e: Exception) {
-                            // Verify network error
+                            networkError = "Could not save level: ${e.localizedMessage}"
                         }
                     }
                 }
@@ -293,7 +310,7 @@ class MainActivity : ComponentActivity() {
                         contentAlignment = Alignment.Center
                     ) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                            Text(text = "❌ CONNECTION FAILED", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = NeonRose)
+                            Text(text = "❌ COULD NOT LOAD GAME", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = NeonRose)
                             Text(text = networkError ?: "", fontSize = 13.sp, color = TextSecondary, textAlign = TextAlign.Center)
                             Button(
                                 onClick = {
@@ -476,21 +493,23 @@ class MainActivity : ComponentActivity() {
         recreate()
     }
 
-    private fun calculateNewStreak(lastCompleted: String?, today: String, currentStreak: Int): Int {
-        if (lastCompleted == null) return 1
+    private fun calculateStreakState(
+        lastCompleted: String?, today: String, currentStreak: Int, recoveryPasses: Int
+    ): Pair<Int, Int> {
+        if (lastCompleted == null) return 1 to 0
         return try {
             val lastDate = LocalDate.parse(lastCompleted)
             val currentDate = LocalDate.parse(today)
             val diffDays = java.time.temporal.ChronoUnit.DAYS.between(lastDate, currentDate)
-            if (diffDays == 1L) {
-                currentStreak + 1
-            } else if (diffDays > 1L) {
-                1
-            } else {
-                currentStreak
+            when {
+                diffDays >= 3L -> 1 to 0
+                diffDays == 2L -> currentStreak to 1
+                recoveryPasses > 0 -> (currentStreak + 1) to 0
+                diffDays == 1L -> (currentStreak + 1) to 0
+                else -> currentStreak to 0
             }
         } catch (e: Exception) {
-            1
+            1 to 0
         }
     }
 }
