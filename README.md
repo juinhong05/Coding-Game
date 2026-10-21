@@ -83,7 +83,7 @@ After the security update, older installed Android builds cannot send authentica
   - **Key**: `SUPABASE_SECRET_KEY` | **Value**: a server-only Supabase secret key (`sb_secret_...`), or use `SUPABASE_SERVICE_ROLE_KEY` with the legacy `service_role` key. `SUPABASE_KEY` also works only when it is one of these server-only keys. A publishable or `anon` key is rejected.
   - **Key**: `AUTH_SECRET` | **Value**: optional separate random secret of at least 32 bytes for signing sessions. Without it, the server derives its signing key from the server-only Supabase key. Rotating the signing key signs users out.
   - **Key**: `CORS_ORIGINS` | **Value**: optional comma-separated browser origins; defaults to the production Vercel URL and `http://localhost:5173`.
-* Run [`backend/security.sql`](backend/security.sql) in the Supabase SQL Editor **after** configuring the server-only key and **before** deploying this backend. It enables row level security on `public.users` and revokes direct table access from `anon` and `authenticated`. No client-side Supabase key is used by this app. Keep the server-only key out of GitHub, the web bundle, and the Android APK.
+* For an existing deployment, configure the server-only key, deploy this backend, confirm it connects to Supabase, and then immediately run [`backend/security.sql`](backend/security.sql) in the Supabase SQL Editor. For a new installation, run the SQL after creating the table and before accepting users. It enables row level security on `public.users` and revokes direct table access from `anon` and `authenticated`. No client-side Supabase key is used by this app. Keep the server-only key out of GitHub, the web bundle, and the Android APK.
 * Production refuses to start without Supabase, or if its configured key is public or the database is unavailable. Local development without Supabase uses `database.json`.
 * Deploy the **backend** after every backend change. A Vercel web deployment alone does not update the Render API. After deployment, `https://YOUR-RENDER-BACKEND-URL.onrender.com/api/version` should return `apiVersion: 3` and `miniGamesFormat: "code-writing"`.
 * Level completion is only shown as successful after the API confirms it was saved. The API awards points only for a newly completed level or mini-game, so repeat submissions cannot raise the score.
@@ -116,7 +116,7 @@ create index if not exists idx_users_sync_code on users(sync_code);
 create index if not exists idx_users_canonical_id on users(canonical_id);
 ```
 
-Then run [`backend/security.sql`](backend/security.sql). This is required for both new and existing tables; merely deploying the API does not block direct Supabase Data API access.
+Then run [`backend/security.sql`](backend/security.sql) according to the deployment order above. This is required for both new and existing tables; merely deploying the API does not block direct Supabase Data API access.
 
 ### Frontend Deployment (e.g. Vercel)
 * Link the repository to a new Vercel project.
