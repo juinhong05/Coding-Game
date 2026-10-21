@@ -23,10 +23,10 @@ Play the live web application here: **[https://coding-game-theta.vercel.app/](ht
   - **Topic 9**: Function Returns (defining functions and returning results)
 * **Per-language progression and scoring**: Python and C++ levels advance independently. A completed level is recorded once, so replaying a level does not award its score again.
 * **Streak recovery**: Missing one day turns the streak indicator gray; complete two levels to recover the streak. Missing two or more days resets it.
-* **Forgot password**: Reset an account password with its username and six-character device sync code.
+* **Forgot password**: Reset an account password with its username and recovery code. New codes are 16 characters; legacy six-character codes also require the original profile ID saved on the same device.
 * **Code-writing mini games**: Eight games per language replace the old debugging and multiple-choice mini games: Christmas Tree Builder, Pattern Printer, Robot Maze, Text Adventure, Mini Shop Checkout, Secret Message Decoder, Scoreboard Builder, and Drawing with Coordinates. Write the missing Python or C++ lines to make the target output. Games unlock at levels 1, 3, 5, 8, 10, 15, 20, and 25. The API checks the submitted lines against each puzzle's solution without executing user code. Each game awards 10 points once; replays award no additional points.
 * **Concept Tutorials**: Integrated sidebar guides explaining active level logic, formatting rules, and code patterns.
-* **Cloud Progress Sync**: Secure guest stats (Scores & Streaks) with a cloud login account to play seamlessly across Web browser clients and native Android Mobile clients.
+* **Cloud Progress Sync**: Account login and guest sessions use signed bearer tokens. Private profile reads and writes require the owning token. Device linking uses a recovery code; new codes are generated with a cryptographic random source.
 
 ---
 
@@ -46,7 +46,7 @@ cd backend
 npm install
 npm start
 ```
-*The local API server runs on `http://localhost:5000`.*
+Set `AUTH_SECRET` to a random value of at least 32 bytes before starting a local API without Supabase. The local API server runs on `http://localhost:5000`.
 
 ### 2. Run the Web Client
 ```bash
@@ -68,6 +68,8 @@ If the Android app opens but shows `Expected BEGIN_ARRAY but was BEGIN_OBJECT at
 
 The Android **Games** tab loads the same unlocked Python and C++ mini games as the web app. Complete level 1 in a language to unlock Christmas Tree Builder. Enter the missing lines and tap **Check Code**; points are awarded only on the first clear of each game. Rebuild and reinstall the APK after pulling Android changes, since web deployments do not update installed Android apps.
 
+After the security update, older installed Android builds cannot send authenticated requests. Rebuild and reinstall the Android app. Existing account owners should sign in again. Existing guest profiles can be recovered on the original device using its displayed sync code; the app retains the old profile ID for that recovery. Keep the new 16-character code private because it grants access to that profile when linking devices.
+
 ---
 
 ## ☁️ Production Deployment Configuration
@@ -78,10 +80,14 @@ The Android **Games** tab loads the same unlocked Python and C++ mini games as t
 * Start command: `node server.js`.
 * Configure the following Environment Variables in Render for Supabase database persistence:
   - **Key**: `SUPABASE_URL` | **Value**: `https://your-project-id.supabase.co`
-  - **Key**: `SUPABASE_KEY` | **Value**: `your-supabase-service-role-or-anon-key`
-* *Note: If Supabase variables are not set, the server will gracefully fallback to local file `database.json` storage.*
+  - **Key**: `SUPABASE_SECRET_KEY` | **Value**: a server-only Supabase secret key (`sb_secret_...`), or use `SUPABASE_SERVICE_ROLE_KEY` with the legacy `service_role` key. `SUPABASE_KEY` also works only when it is one of these server-only keys. A publishable or `anon` key is rejected.
+  - **Key**: `AUTH_SECRET` | **Value**: optional separate random secret of at least 32 bytes for signing sessions. Without it, the server derives its signing key from the server-only Supabase key. Rotating the signing key signs users out.
+  - **Key**: `CORS_ORIGINS` | **Value**: optional comma-separated browser origins; defaults to the production Vercel URL and `http://localhost:5173`.
+* Run [`backend/security.sql`](backend/security.sql) in the Supabase SQL Editor **after** configuring the server-only key and **before** deploying this backend. It enables row level security on `public.users` and revokes direct table access from `anon` and `authenticated`. No client-side Supabase key is used by this app. Keep the server-only key out of GitHub, the web bundle, and the Android APK.
+* Production refuses to start without Supabase, or if its configured key is public or the database is unavailable. Local development without Supabase uses `database.json`.
 * Deploy the **backend** after every backend change. A Vercel web deployment alone does not update the Render API. After deployment, `https://YOUR-RENDER-BACKEND-URL.onrender.com/api/version` should return `apiVersion: 3` and `miniGamesFormat: "code-writing"`.
 * Level completion is only shown as successful after the API confirms it was saved. The API awards points only for a newly completed level or mini-game, so repeat submissions cannot raise the score.
+* The API returns a signed session token on guest registration, account registration, login, password reset, and device link. Web stores it in local storage; Android stores it in private app preferences. Private endpoints require `Authorization: Bearer <token>` and reject requests for another user ID. Auth attempts and sync code guesses are limited per IP, and passwords are stored with salted scrypt hashes. Existing SHA-256 password hashes are upgraded at the next successful login.
 
 #### Supabase Database Table Setup (Run in Supabase SQL Editor):
 ```sql
@@ -109,6 +115,8 @@ alter table users add column if not exists recovery_level_passes integer default
 create index if not exists idx_users_sync_code on users(sync_code);
 create index if not exists idx_users_canonical_id on users(canonical_id);
 ```
+
+Then run [`backend/security.sql`](backend/security.sql). This is required for both new and existing tables; merely deploying the API does not block direct Supabase Data API access.
 
 ### Frontend Deployment (e.g. Vercel)
 * Link the repository to a new Vercel project.

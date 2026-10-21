@@ -26,10 +26,21 @@ let isSupabase = false;
 // Async Database Initializer
 export async function initDb() {
   const supabaseUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const supabaseKey = process.env.SUPABASE_KEY || 
-                      process.env.SUPABASE_ANON_KEY || 
-                      process.env.SUPABASE_PUBLISHABLE_KEY || 
-                      process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const supabaseKey = process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY;
+
+  if (supabaseUrl || supabaseKey) {
+    if (!supabaseUrl || !supabaseKey) throw new Error('Both SUPABASE_URL and a server-only Supabase secret key are required');
+    const isSecretKey = supabaseKey.startsWith('sb_secret_');
+    let isServiceRole = false;
+    if (!isSecretKey) {
+      try {
+        isServiceRole = JSON.parse(Buffer.from(supabaseKey.split('.')[1], 'base64url').toString('utf8')).role === 'service_role';
+      } catch { /* Reject unknown and public keys below. */ }
+    }
+    if (!isSecretKey && !isServiceRole) throw new Error('Supabase key must be a server-only secret or service_role key');
+  } else if (process.env.NODE_ENV === 'production') {
+    throw new Error('Production requires Supabase configuration; refusing ephemeral local database fallback');
+  }
 
   if (supabaseUrl && supabaseKey) {
     try {
@@ -43,15 +54,13 @@ export async function initDb() {
       const { data, error } = await supabase.from('users').select('id').limit(1);
       if (error) {
         console.error("Supabase table query error:", error.message);
-        console.warn("⚠️ Make sure you have created the 'users' table in Supabase. Falling back to local database.json.");
-        isSupabase = false;
+        throw new Error(`Supabase users table is unavailable: ${error.message}`);
       } else {
         isSupabase = true;
         console.log("Connected successfully to Supabase Cloud Database.");
       }
     } catch (err) {
-      console.error("Failed to initialize Supabase client, falling back to local file database:", err.message);
-      isSupabase = false;
+      throw new Error(`Failed to initialize Supabase: ${err.message}`);
     }
   } else {
     console.log("No SUPABASE_URL / SUPABASE_KEY detected. Using local filesystem database.json.");
@@ -158,7 +167,22 @@ function writeData(data) {
 
 // Password hashing helper
 function hashPassword(password) {
-  return crypto.createHash('sha256').update(password).digest('hex');
+  const salt = crypto.randomBytes(16).toString('hex');
+  return `scrypt:${salt}:${crypto.scryptSync(password, salt, 64).toString('hex')}`;
+}
+
+function verifyPassword(password, stored) {
+  if (typeof stored !== 'string') return false;
+  let candidate;
+  if (stored.startsWith('scrypt:')) {
+    const [, salt, digest] = stored.split(':');
+    if (!/^[a-f0-9]{32}$/.test(salt) || !/^[a-f0-9]{128}$/.test(digest)) return false;
+    candidate = crypto.scryptSync(password, salt, 64);
+    return crypto.timingSafeEqual(candidate, Buffer.from(digest, 'hex'));
+  }
+  if (!/^[a-f0-9]{64}$/.test(stored)) return false;
+  candidate = crypto.createHash('sha256').update(password).digest();
+  return crypto.timingSafeEqual(candidate, Buffer.from(stored, 'hex'));
 }
 
 // Resolves canonical user ID (handling linked profiles) in Local memory
@@ -197,7 +221,7 @@ async function resolveCanonicalIdSupabase(userId) {
   return currentId;
 }
 
-// Helper to generate a unique 6-character alphanumeric sync code
+// Helper to generate a unique, hard-to-guess alphanumeric sync code
 async function generateSyncCode() {
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
   let code = '';
@@ -205,8 +229,8 @@ async function generateSyncCode() {
   if (isSupabase) {
     do {
       code = '';
-      for (let i = 0; i < 6; i++) {
-        code += chars.charAt(Math.floor(Math.random() * chars.length));
+      for (let i = 0; i < 16; i++) {
+        code += chars.charAt(crypto.randomInt(chars.length));
       }
       const { data } = await supabase.from('users').select('id').eq('sync_code', code).maybeSingle();
       if (!data) break;
@@ -216,8 +240,8 @@ async function generateSyncCode() {
     const existingCodes = new Set(Object.values(data.users).map(u => u.syncCode));
     do {
       code = '';
-      for (let i = 0; i < 6; i++) {
-        code += chars.charAt(Math.floor(Math.random() * chars.length));
+      for (let i = 0; i < 16; i++) {
+        code += chars.charAt(crypto.randomInt(chars.length));
       }
     } while (existingCodes.has(code));
   }
@@ -228,7 +252,7 @@ async function generateSyncCode() {
 export const db = {
   // Create a new anonymous user profile
   async createUser() {
-    const id = Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+    const id = crypto.randomBytes(18).toString('base64url');
     const syncCode = await generateSyncCode();
     
     const newUser = {
@@ -451,7 +475,7 @@ export const db = {
   },
 
   // Link two profiles together using a sync code
-  async linkProfiles(currentUserId, targetSyncCode) {
+  async linkProfiles(currentUserId, targetSyncCode, legacyUserId) {
     const codeKey = targetSyncCode.trim().toUpperCase();
 
     if (isSupabase) {
@@ -465,6 +489,9 @@ export const db = {
       if (!targetRow) {
         throw new Error("Invalid sync code");
       }
+      if (codeKey.length < 16 && (targetRow.id !== legacyUserId || targetRow.username)) {
+        throw new Error('Legacy guest codes also require the original device profile');
+      }
 
       const targetCanonicalId = await resolveCanonicalIdSupabase(targetRow.id);
       if (currentCanonicalId === targetCanonicalId) {
@@ -473,6 +500,7 @@ export const db = {
       }
 
       const { data: primaryRow } = await supabase.from('users').select('*').eq('id', targetCanonicalId).maybeSingle();
+      if (codeKey.length < 16 && primaryRow.username) throw new Error('Sign in to link an existing account');
       const { data: secondaryRow } = await supabase.from('users').select('*').eq('id', currentCanonicalId).maybeSingle();
       if (!secondaryRow) {
         throw new Error("Active device profile session not found on server. Please restart/reload app.");
@@ -506,7 +534,8 @@ export const db = {
         score: mergedScore,
         streak: mergedStreak,
         last_completed_date: mergedLastCompleted,
-        updated_at: new Date().toISOString()
+        updated_at: new Date().toISOString(),
+        ...(codeKey.length < 16 ? { sync_code: await generateSyncCode() } : {})
       }).eq('id', targetCanonicalId);
       if (mergeError) throw new Error(`Could not merge progress: ${mergeError.message}`);
 
@@ -533,6 +562,9 @@ export const db = {
       if (!targetUser) {
         throw new Error("Invalid sync code");
       }
+      if (codeKey.length < 16 && (targetUser.id !== legacyUserId || targetUser.username)) {
+        throw new Error('Legacy guest codes also require the original device profile');
+      }
 
       const targetCanonicalId = resolveCanonicalIdLocal(targetUser.id, data.users);
       if (currentCanonicalId === targetCanonicalId) {
@@ -540,6 +572,7 @@ export const db = {
       }
 
       const primary = data.users[targetCanonicalId];
+      if (codeKey.length < 16 && primary.username) throw new Error('Sign in to link an existing account');
       const secondary = data.users[currentCanonicalId];
       if (!secondary) {
         throw new Error("Active device profile session not found on server. Please restart/reload app.");
@@ -567,6 +600,7 @@ export const db = {
       primary.streak = mergedStreak;
       primary.lastCompletedDate = mergedLastCompleted;
       primary.updatedAt = new Date().toISOString();
+      if (codeKey.length < 16) primary.syncCode = await generateSyncCode();
 
       secondary.canonicalId = targetCanonicalId;
       secondary.updatedAt = new Date().toISOString();
@@ -604,7 +638,7 @@ export const db = {
         : { data: null };
 
       if (!userRow) {
-        const newId = Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+        const newId = crypto.randomBytes(18).toString('base64url');
         const syncCode = await generateSyncCode();
         const newUser = {
           id: newId,
@@ -613,22 +647,27 @@ export const db = {
           passwordHash: hashPassword(password),
           score: 0,
           streak: 0,
+          recoveryLevelPasses: 0,
           lastCompletedDate: null,
-          completedChallenges: [],
+          completedChallenges: { python: [], cpp: [] },
           completionHistory: {},
+          miniGamesCompleted: { python: [], cpp: [] },
           preferredLanguage: 'python',
           canonicalId: newId,
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString()
         };
-        await supabase.from('users').insert(mapUserToRow(newUser));
+        const { error } = await supabase.from('users').insert(mapUserToRow(newUser));
+        if (error) throw new Error('Could not create account');
         return { ...newUser, canonicalId: newId };
       } else {
-        await supabase.from('users').update({
+        const { error } = await supabase.from('users').update({
           username: username.trim(),
           password_hash: hashPassword(password),
+          ...(userRow.sync_code.length < 16 ? { sync_code: await generateSyncCode() } : {}),
           updated_at: new Date().toISOString()
         }).eq('id', canonicalId);
+        if (error) throw new Error('Could not create account');
 
         const { data: updated } = await supabase.from('users').select('*').eq('id', canonicalId).maybeSingle();
         return { ...mapRowToUser(updated), canonicalId };
@@ -647,7 +686,7 @@ export const db = {
       let user = data.users[canonicalId];
 
       if (!user) {
-        const newId = Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+        const newId = crypto.randomBytes(18).toString('base64url');
         const syncCode = await generateSyncCode();
         user = {
           id: newId,
@@ -656,9 +695,11 @@ export const db = {
           passwordHash: hashPassword(password),
           score: 0,
           streak: 0,
+          recoveryLevelPasses: 0,
           lastCompletedDate: null,
-          completedChallenges: [],
+          completedChallenges: { python: [], cpp: [] },
           completionHistory: {},
+          miniGamesCompleted: { python: [], cpp: [] },
           preferredLanguage: 'python',
           canonicalId: newId,
           createdAt: new Date().toISOString()
@@ -667,6 +708,7 @@ export const db = {
       } else {
         user.username = username.trim();
         user.passwordHash = hashPassword(password);
+        if (user.syncCode.length < 16) user.syncCode = await generateSyncCode();
         user.updatedAt = new Date().toISOString();
       }
 
@@ -678,7 +720,6 @@ export const db = {
   // Authenticate credentials
   async login(username, password) {
     const lowerUsername = username.trim().toLowerCase();
-    const hash = hashPassword(password);
 
     if (isSupabase) {
       const { data: userRow } = await supabase
@@ -687,12 +728,23 @@ export const db = {
         .ilike('username', lowerUsername)
         .maybeSingle();
 
-      if (!userRow || userRow.password_hash !== hash) {
+      if (!userRow || !verifyPassword(password, userRow.password_hash)) {
         throw new Error("Invalid username or password");
+      }
+
+      if (!userRow.password_hash.startsWith('scrypt:')) {
+        userRow.password_hash = hashPassword(password);
+        const { error } = await supabase.from('users').update({ password_hash: userRow.password_hash }).eq('id', userRow.id);
+        if (error) throw new Error('Could not update password security');
       }
 
       const canonicalId = await resolveCanonicalIdSupabase(userRow.id);
       const { data: canonicalRow } = await supabase.from('users').select('*').eq('id', canonicalId).maybeSingle();
+      if (canonicalRow.sync_code.length < 16) {
+        canonicalRow.sync_code = await generateSyncCode();
+        const { error } = await supabase.from('users').update({ sync_code: canonicalRow.sync_code }).eq('id', canonicalId);
+        if (error) throw new Error('Could not upgrade recovery code');
+      }
       return { ...mapRowToUser(canonicalRow), resolvedId: canonicalId };
 
     } else {
@@ -701,11 +753,20 @@ export const db = {
         u => u.username && u.username.toLowerCase() === lowerUsername
       );
 
-      if (!user || user.passwordHash !== hash) {
+      if (!user || !verifyPassword(password, user.passwordHash)) {
         throw new Error("Invalid username or password");
       }
 
+      if (!user.passwordHash.startsWith('scrypt:')) {
+        user.passwordHash = hashPassword(password);
+        writeData(data);
+      }
+
       const canonicalId = resolveCanonicalIdLocal(user.id, data.users);
+      if (data.users[canonicalId].syncCode.length < 16) {
+        data.users[canonicalId].syncCode = await generateSyncCode();
+        writeData(data);
+      }
       return {
         ...data.users[canonicalId],
         resolvedId: canonicalId
@@ -713,8 +774,8 @@ export const db = {
     }
   },
 
-  // Reset password using username and account's 6-character sync code
-  async resetPassword(username, syncCode, newPassword) {
+  // Reset password using username and account's recovery code
+  async resetPassword(username, syncCode, newPassword, legacyUserId) {
     const lowerUsername = username.trim().toLowerCase();
     const cleanSyncCode = syncCode.trim().toUpperCase();
     const newHash = hashPassword(newPassword);
@@ -734,14 +795,17 @@ export const db = {
       const { data: canonicalRow } = await supabase.from('users').select('*').eq('id', canonicalId).maybeSingle();
       const user = mapRowToUser(canonicalRow);
 
-      if (!user || user.syncCode.toUpperCase() !== cleanSyncCode) {
+      if (!user || user.syncCode.toUpperCase() !== cleanSyncCode ||
+          (cleanSyncCode.length < 16 && canonicalId !== legacyUserId)) {
         throw new Error("Invalid Sync Code verification for this username");
       }
 
-      await supabase.from('users').update({
+      const { error } = await supabase.from('users').update({
         password_hash: newHash,
+        ...(cleanSyncCode.length < 16 ? { sync_code: await generateSyncCode() } : {}),
         updated_at: new Date().toISOString()
       }).eq('id', canonicalId);
+      if (error) throw new Error('Could not reset password');
 
       const { data: updated } = await supabase.from('users').select('*').eq('id', canonicalId).maybeSingle();
       return { ...mapRowToUser(updated), resolvedId: canonicalId };
@@ -758,11 +822,13 @@ export const db = {
       const canonicalId = resolveCanonicalIdLocal(userEntry.id, data.users);
       const targetUser = data.users[canonicalId];
 
-      if (!targetUser || targetUser.syncCode.toUpperCase() !== cleanSyncCode) {
+      if (!targetUser || targetUser.syncCode.toUpperCase() !== cleanSyncCode ||
+          (cleanSyncCode.length < 16 && canonicalId !== legacyUserId)) {
         throw new Error("Invalid Sync Code verification for this username");
       }
 
       targetUser.passwordHash = newHash;
+      if (cleanSyncCode.length < 16) targetUser.syncCode = await generateSyncCode();
       targetUser.updatedAt = new Date().toISOString();
       writeData(data);
       return { ...targetUser, resolvedId: canonicalId };

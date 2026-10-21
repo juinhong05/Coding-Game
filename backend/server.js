@@ -3,12 +3,57 @@ import cors from 'cors';
 import { db, initDb } from './db.js';
 import { CHALLENGE_BANK, getChallengeForDate } from './challenges.js';
 import { MINI_GAME_BANK, verifyMiniGameCode } from './miniGames.js';
+import { decodeToken, issueToken, verifyToken } from './auth.js';
 
 const app = express();
 const PORT = process.env.PORT || 5000;
+app.disable('x-powered-by');
 
-app.use(cors());
-app.use(express.json());
+const allowedOrigins = (process.env.CORS_ORIGINS || 'https://coding-game-theta.vercel.app,http://localhost:5173').split(',').map(value => value.trim());
+app.use(cors({ origin(origin, callback) {
+  callback(null, !origin || allowedOrigins.includes(origin));
+} }));
+app.use(express.json({ limit: '32kb' }));
+app.set('trust proxy', 1);
+app.use('/api', (req, res, next) => {
+  res.set('Cache-Control', 'no-store');
+  next();
+});
+
+const attempts = new Map();
+function limitSensitive(maxAttempts, windowMs) {
+  return (req, res, next) => {
+    const key = `${req.route.path}:${req.ip}`;
+    const now = Date.now();
+    const state = attempts.get(key);
+    if (attempts.size > 10000) for (const [oldKey, oldState] of attempts) if (oldState.until < now) attempts.delete(oldKey);
+    if (!state || state.until < now) {
+      attempts.set(key, { count: 1, until: now + windowMs });
+      return next();
+    }
+    if (++state.count > maxAttempts) return res.status(429).json({ error: 'Too many attempts. Please try again later.' });
+    next();
+  };
+}
+
+const publicRoutes = new Set(['/version', '/leaderboard', '/user/register', '/user/register-account', '/user/login', '/user/forgot-password']);
+app.use('/api', async (req, res, next) => {
+  if (publicRoutes.has(req.path)) return next();
+  const match = /^Bearer (\S+)$/.exec(req.get('authorization') || '');
+  if (!match) return res.status(401).json({ error: 'Sign in or recover this profile to continue.' });
+  try {
+    const payload = decodeToken(match[1]);
+    if (!payload) throw new Error('Invalid token');
+    const user = await db.getUser(payload.id);
+    if (!user || user.id !== payload.id || !verifyToken(match[1], user)) throw new Error('Invalid token');
+    req.authUser = user;
+    const requestedIds = [/^\/user\/([^/]+)/.exec(req.path)?.[1], req.query.userId, req.body?.userId].filter(Boolean);
+    if (requestedIds.some(id => id !== user.id)) return res.status(403).json({ error: 'This profile belongs to another user.' });
+    next();
+  } catch {
+    res.status(401).json({ error: 'Session expired or invalid. Please sign in again.' });
+  }
+});
 
 // Log requests
 app.use((req, res, next) => {
@@ -19,11 +64,11 @@ app.use((req, res, next) => {
 // Helper for display nicknames
 function getNickname(user) {
   if (user.username) return user.username;
-  return user.nickname || `Coder_${user.syncCode}`;
+  return user.nickname || `Coder_${user.id.slice(0, 6)}`;
 }
 
 // Helper to build the public user profile payload
-function userPayload(user) {
+function userPayload(user, includeToken = false) {
   return {
     id: user.resolvedId || user.canonicalId || user.id,
     syncCode: user.syncCode,
@@ -36,7 +81,8 @@ function userPayload(user) {
     lastCompletedDate: user.lastCompletedDate,
     completedChallenges: user.completedChallenges,
     completionHistory: user.completionHistory,
-    miniGamesCompleted: user.miniGamesCompleted
+    miniGamesCompleted: user.miniGamesCompleted,
+    ...(includeToken ? { token: issueToken(user) } : {})
   };
 }
 
@@ -193,58 +239,69 @@ app.post('/api/challenges/verify', (req, res) => {
 });
 
 // 3. Register Anonymous Profile
-app.post('/api/user/register', async (req, res) => {
+app.post('/api/user/register', limitSensitive(20, 60 * 60 * 1000), async (req, res) => {
   try {
     const newUser = await db.createUser();
-    res.status(201).json(userPayload(newUser));
+    res.status(201).json(userPayload(newUser, true));
   } catch (err) {
     res.status(500).json({ error: "Failed to register user" });
   }
 });
 
 // 4. Create Credentialed Account
-app.post('/api/user/register-account', async (req, res) => {
+app.post('/api/user/register-account', limitSensitive(10, 60 * 60 * 1000), async (req, res) => {
   const { userId, username, password } = req.body;
   if (!username || !password) {
     return res.status(400).json({ error: "Username and password are required" });
   }
+  if (typeof username !== 'string' || username.length > 50 || typeof password !== 'string' || password.length < 8 || password.length > 256) {
+    return res.status(400).json({ error: 'Use a username under 50 characters and a password of 8 to 256 characters.' });
+  }
   try {
+    if (userId) {
+      const match = /^Bearer (\S+)$/.exec(req.get('authorization') || '');
+      const current = await db.getUser(userId);
+      if (!match || !current || current.id !== userId || !verifyToken(match[1], current)) {
+        return res.status(403).json({ error: 'Sign in to this profile before creating an account.' });
+      }
+      if (current.username) return res.status(409).json({ error: 'This profile already has an account.' });
+    }
     const user = await db.registerAccount(userId, username, password);
-    res.status(200).json(userPayload(user));
+    res.status(200).json(userPayload(user, true));
   } catch (err) {
     res.status(400).json({ error: err.message || "Registration failed" });
   }
 });
 
 // 5. Account Sign In / Login
-app.post('/api/user/login', async (req, res) => {
+app.post('/api/user/login', limitSensitive(15, 15 * 60 * 1000), async (req, res) => {
   const { username, password } = req.body;
   if (!username || !password) {
     return res.status(400).json({ error: "Username and password are required" });
   }
   try {
     const user = await db.login(username, password);
-    res.status(200).json(userPayload(user));
+    res.status(200).json(userPayload(user, true));
   } catch (err) {
     res.status(401).json({ error: err.message || "Invalid credentials" });
   }
 });
 
 // 5b. Forgot / Reset Password
-app.post('/api/user/forgot-password', async (req, res) => {
-  const { username, syncCode, newPassword } = req.body;
+app.post('/api/user/forgot-password', limitSensitive(5, 60 * 60 * 1000), async (req, res) => {
+  const { username, syncCode, newPassword, legacyUserId } = req.body;
   if (!username || !syncCode || !newPassword) {
     return res.status(400).json({ error: "Username, syncCode, and newPassword are required" });
   }
-  if (newPassword.length < 4) {
-    return res.status(400).json({ error: "New password must be at least 4 characters long" });
+  if (typeof newPassword !== 'string' || newPassword.length < 8 || newPassword.length > 256) {
+    return res.status(400).json({ error: "New password must be 8 to 256 characters long" });
   }
 
   try {
-    const updated = await db.resetPassword(username, syncCode, newPassword);
-    res.status(200).json(userPayload(updated));
+    const updated = await db.resetPassword(username, syncCode, newPassword, legacyUserId);
+    res.status(200).json(userPayload(updated, true));
   } catch (err) {
-    res.status(400).json({ error: err.message || "Password reset failed" });
+    res.status(400).json({ error: 'Invalid account or recovery code' });
   }
 });
 
@@ -290,12 +347,12 @@ app.post('/api/user/:id/progress', async (req, res) => {
 });
 
 // 9. Link Devices / Profiles
-app.post('/api/user/:id/sync/link', async (req, res) => {
-  const { syncCode } = req.body;
+app.post('/api/user/:id/sync/link', limitSensitive(5, 60 * 60 * 1000), async (req, res) => {
+  const { syncCode, legacyUserId } = req.body;
   if (!syncCode) return res.status(400).json({ error: "Sync code is required" });
   try {
-    const merged = await db.linkProfiles(req.params.id, syncCode);
-    res.json(userPayload(merged));
+    const merged = await db.linkProfiles(req.params.id, syncCode, legacyUserId);
+    res.json(userPayload(merged, true));
   } catch (err) {
     res.status(400).json({ error: err.message || "Failed to link profiles" });
   }

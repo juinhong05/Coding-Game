@@ -1,8 +1,8 @@
 package com.dailycoding.challenge.data.api
 
+import android.content.Context
 import com.dailycoding.challenge.data.model.*
 import okhttp3.OkHttpClient
-import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 import retrofit2.http.*
@@ -54,12 +54,33 @@ interface ChallengeService {
 object RetrofitInstance {
     private const val BASE_URL = "https://coding-game-backend-8g31.onrender.com/api/"
 
-    private val logging = HttpLoggingInterceptor().apply {
-        level = HttpLoggingInterceptor.Level.BODY
+    @Volatile private var sessionToken: String? = null
+
+    fun initialize(context: Context) {
+        sessionToken = context.getSharedPreferences("synapse_session", Context.MODE_PRIVATE).getString("token", null)
+    }
+
+    fun hasSession(): Boolean = !sessionToken.isNullOrBlank()
+
+    fun saveSession(context: Context, user: User) {
+        val token = user.token ?: throw IllegalStateException("The server did not create a secure session")
+        sessionToken = token
+        context.getSharedPreferences("synapse_session", Context.MODE_PRIVATE).edit().putString("token", token).apply()
+    }
+
+    fun clearSession(context: Context) {
+        sessionToken = null
+        context.getSharedPreferences("synapse_session", Context.MODE_PRIVATE).edit().remove("token").apply()
     }
 
     private val client = OkHttpClient.Builder()
-        .addInterceptor(logging)
+        .addInterceptor { chain ->
+            val token = sessionToken
+            val request = chain.request().newBuilder().apply {
+                if (!token.isNullOrBlank()) header("Authorization", "Bearer $token")
+            }.build()
+            chain.proceed(request)
+        }
         .build()
 
     val api: ChallengeService by lazy {

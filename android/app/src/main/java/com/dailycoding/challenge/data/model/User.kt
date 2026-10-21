@@ -15,6 +15,7 @@ data class CompletedChallenges(
 
 data class User(
     val id: String,
+    val token: String? = null,
     val syncCode: String,
     val username: String?,
     val nickname: String,
@@ -43,7 +44,8 @@ data class ProgressUpdateRequest(
 )
 
 data class LinkRequest(
-    val syncCode: String
+    val syncCode: String,
+    val legacyUserId: String? = null
 )
 
 data class LoginRequest(

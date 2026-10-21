@@ -300,7 +300,7 @@ fun AccountScreen(
 
                 OutlinedTextField(
                     value = syncInput,
-                    onValueChange = { if (it.length <= 6) syncInput = it.uppercase() },
+                    onValueChange = { if (it.length <= 32) syncInput = it.uppercase() },
                     modifier = Modifier.fillMaxWidth(),
                     textStyle = TextStyle(
                         fontFamily = FontFamily.Monospace,
@@ -311,7 +311,7 @@ fun AccountScreen(
                     ),
                     placeholder = {
                         Text(
-                            text = "ENTER 6-DIGIT CODE",
+                            text = "ENTER PROFILE SYNC CODE",
                             modifier = Modifier.fillMaxWidth(),
                             textAlign = TextAlign.Center,
                             fontSize = 12.sp,
@@ -326,8 +326,8 @@ fun AccountScreen(
                 )
 
                 Button(
-                    onClick = { if (syncInput.length == 6) onLinkProfile(syncInput) },
-                    enabled = syncInput.length == 6 && syncStatus.first != "loading",
+                    onClick = { if (syncInput.length >= 6) onLinkProfile(syncInput) },
+                    enabled = syncInput.length >= 6 && syncStatus.first != "loading",
                     modifier = Modifier.fillMaxWidth().height(44.dp),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = NeonCyan,

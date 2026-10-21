@@ -30,6 +30,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        RetrofitInstance.initialize(this)
 
         setContent {
             SynapseTheme {
@@ -64,20 +65,32 @@ class MainActivity : ComponentActivity() {
                     
                     try {
                         // 1. Fetch or Register User
-                        val user = if (savedUserId != null) {
+                        val user = if (savedUserId != null && RetrofitInstance.hasSession()) {
                             try {
                                 RetrofitInstance.api.getUser(savedUserId)
                             } catch (e: Exception) {
-                                if (e is HttpException && e.code() == 404) {
+                                if (e is HttpException && (e.code() == 404 || e.code() == 401)) {
+                                    RetrofitInstance.clearSession(this@MainActivity)
                                     val freshUser = RetrofitInstance.api.registerUser()
+                                    RetrofitInstance.saveSession(this@MainActivity, freshUser)
+                                    sharedPref.edit().putString("legacy_user_id", savedUserId).apply()
                                     sharedPref.edit().putString("user_id", freshUser.id).apply()
+                                    activeTab = "account"
+                                    authStatus = "error" to "Session expired. Sign in to your account or link your old profile with its sync code."
                                     freshUser
                                 } else {
                                     throw e
                                 }
                             }
                         } else {
+                            if (savedUserId != null) {
+                                sharedPref.edit().putString("legacy_user_id", savedUserId).apply()
+                                activeTab = "account"
+                                authStatus = "error" to "Security update: sign in or link your old profile with its sync code."
+                            }
+                            RetrofitInstance.clearSession(this@MainActivity)
                             val freshUser = RetrofitInstance.api.registerUser()
+                            RetrofitInstance.saveSession(this@MainActivity, freshUser)
                             sharedPref.edit().putString("user_id", freshUser.id).apply()
                             freshUser
                         }
@@ -130,7 +143,8 @@ class MainActivity : ComponentActivity() {
                         authStatus = "loading" to "Authenticating..."
                         try {
                             val user = RetrofitInstance.api.loginUser(LoginRequest(username, password))
-                            getPreferences(Context.MODE_PRIVATE).edit().putString("user_id", user.id).apply()
+                            RetrofitInstance.saveSession(this@MainActivity, user)
+                            getPreferences(Context.MODE_PRIVATE).edit().putString("user_id", user.id).remove("legacy_user_id").apply()
                             userState = user
                             activeMiniGame = null
                             miniGameFeedback = null
@@ -159,6 +173,7 @@ class MainActivity : ComponentActivity() {
                                     password = password
                                 )
                             )
+                            RetrofitInstance.saveSession(this@MainActivity, user)
                             getPreferences(Context.MODE_PRIVATE).edit().putString("user_id", user.id).apply()
                             userState = user
                             activeMiniGame = null
@@ -180,9 +195,11 @@ class MainActivity : ComponentActivity() {
                     lifecycleScope.launch {
                         isLoading = true
                         try {
-                            getPreferences(Context.MODE_PRIVATE).edit().remove("user_id").apply()
+                            getPreferences(Context.MODE_PRIVATE).edit().remove("user_id").remove("legacy_user_id").apply()
+                            RetrofitInstance.clearSession(this@MainActivity)
                             // Register fresh guest
                             val guestUser = RetrofitInstance.api.registerUser()
+                            RetrofitInstance.saveSession(this@MainActivity, guestUser)
                             getPreferences(Context.MODE_PRIVATE).edit().putString("user_id", guestUser.id).apply()
                             userState = guestUser
                             activeMiniGame = null
@@ -208,8 +225,10 @@ class MainActivity : ComponentActivity() {
                         try {
                             val user = userState
                             if (user != null) {
-                                val mergedUser = RetrofitInstance.api.linkProfile(user.id, LinkRequest(code))
-                                getPreferences(Context.MODE_PRIVATE).edit().putString("user_id", mergedUser.id).apply()
+                                val legacyId = getPreferences(Context.MODE_PRIVATE).getString("legacy_user_id", null)
+                                val mergedUser = RetrofitInstance.api.linkProfile(user.id, LinkRequest(code, legacyId))
+                                RetrofitInstance.saveSession(this@MainActivity, mergedUser)
+                                getPreferences(Context.MODE_PRIVATE).edit().putString("user_id", mergedUser.id).remove("legacy_user_id").apply()
                                 userState = mergedUser
                                 activeMiniGame = null
                                 miniGameFeedback = null

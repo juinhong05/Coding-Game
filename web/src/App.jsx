@@ -3,6 +3,20 @@ import './App.css';
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:5000/api';
 
+function apiFetch(url, options = {}) {
+  const token = localStorage.getItem('synapse_token');
+  return fetch(url, {
+    ...options,
+    headers: { ...options.headers, ...(token ? { Authorization: `Bearer ${token}` } : {}) }
+  });
+}
+
+function saveSession(profile) {
+  if (!profile.token) throw new Error('The server did not create a secure session.');
+  localStorage.setItem('synapse_userId', profile.id);
+  localStorage.setItem('synapse_token', profile.token);
+}
+
 function App() {
   // Navigation & Screen States
   const [activeTab, setActiveTab] = useState('dashboard'); // 'dashboard' | 'minigames' | 'leaderboard' | 'account'
@@ -11,6 +25,7 @@ function App() {
   
   // User & Challenge Data
   const [user, setUser] = useState(null);
+  const [startupError, setStartupError] = useState('');
   const [challenge, setChallenge] = useState(null);
   const [leaderboard, setLeaderboard] = useState([]);
   const [miniGamesList, setMiniGamesList] = useState([]);
@@ -51,33 +66,46 @@ function App() {
   useEffect(() => {
     const fetchUser = async (id) => {
       try {
-        const res = await fetch(`${API_BASE}/user/${id}`);
-        if (!res.ok) throw new Error('User not found');
+        const res = await apiFetch(`${API_BASE}/user/${id}`);
+        if (!res.ok) {
+          if (res.status === 401 || res.status === 404) {
+            localStorage.setItem('synapse_legacy_userId', id);
+            localStorage.removeItem('synapse_token');
+            setAuthSuccess('Session expired. Sign in or link your previous guest profile with its sync code.');
+            registerNewUser();
+            return;
+          }
+          throw new Error('Could not load your profile');
+        }
         const data = await res.json();
         setUser(data);
         fetchChallenge(data.id);
       } catch (err) {
-        console.warn("User ID invalid or not found on server, registering new guest profile.");
-        registerNewUser();
+        setStartupError('Could not reach your profile. Check the connection and retry.');
       }
     };
 
     const registerNewUser = async () => {
       try {
-        const res = await fetch(`${API_BASE}/user/register`, { method: 'POST' });
+        const res = await apiFetch(`${API_BASE}/user/register`, { method: 'POST' });
         const data = await res.json();
-        localStorage.setItem('synapse_userId', data.id);
+        saveSession(data);
         setUser(data);
         fetchChallenge(data.id);
       } catch (err) {
         console.error("Failed to register user:", err);
+        setStartupError('Could not create a secure session. Check the connection and retry.');
       }
     };
 
     const savedId = localStorage.getItem('synapse_userId');
-    if (savedId) {
+    if (savedId && localStorage.getItem('synapse_token')) {
       fetchUser(savedId);
     } else {
+      if (savedId) {
+        localStorage.setItem('synapse_legacy_userId', savedId);
+        setAuthSuccess('Security update: sign in to your account, or link your previous guest profile with its sync code.');
+      }
       registerNewUser();
     }
   }, []);
@@ -94,7 +122,7 @@ function App() {
       if (userId) params.set('userId', userId);
       if (activeLanguage) params.set('language', activeLanguage);
       const url = `${API_BASE}/challenges/daily?${params.toString()}`;
-      const res = await fetch(url);
+      const res = await apiFetch(url);
       const data = await res.json();
       setChallenge(data);
     } catch (err) {
@@ -104,7 +132,7 @@ function App() {
 
   const fetchLeaderboard = async () => {
     try {
-      const res = await fetch(`${API_BASE}/leaderboard`);
+      const res = await apiFetch(`${API_BASE}/leaderboard`);
       const data = await res.json();
       setLeaderboard(data);
     } catch (err) {
@@ -146,7 +174,7 @@ function App() {
     try {
       const activeLang = lang || (user ? user.preferredLanguage : 'python');
       const url = userId ? `${API_BASE}/minigames?userId=${userId}&language=${activeLang}` : `${API_BASE}/minigames?language=${activeLang}`;
-      const res = await fetch(url);
+      const res = await apiFetch(url);
       const data = await res.json();
       setMiniGamesList(data.games || []);
     } catch (err) {
@@ -178,7 +206,7 @@ function App() {
     }
 
     try {
-      const res = await fetch(`${API_BASE}/minigames/verify`, {
+      const res = await apiFetch(`${API_BASE}/minigames/verify`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -197,7 +225,7 @@ function App() {
         setIsSuccess(true);
         setMiniOutput(data.output || '');
         // Refresh user profile and mini-games list
-        const refreshed = await fetch(`${API_BASE}/user/${user.id}`).then(r => r.json());
+        const refreshed = await apiFetch(`${API_BASE}/user/${user.id}`).then(r => r.json());
         setUser(refreshed);
         fetchMiniGames(user.id, user.preferredLanguage);
         setScoreBreakdown({
@@ -330,7 +358,7 @@ function App() {
       submissionSuccess = runCodeTests();
     } else if (challenge.type === 'parsons') {
       const submissionLines = parsonsLines.map(line => line.content);
-      const res = await fetch(`${API_BASE}/challenges/verify`, {
+      const res = await apiFetch(`${API_BASE}/challenges/verify`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -346,7 +374,7 @@ function App() {
         setHasSubmitted(false);
         return;
       }
-      const res = await fetch(`${API_BASE}/challenges/verify`, {
+      const res = await apiFetch(`${API_BASE}/challenges/verify`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -364,7 +392,7 @@ function App() {
         setHasSubmitted(false);
         return;
       }
-      const res = await fetch(`${API_BASE}/challenges/verify`, {
+      const res = await apiFetch(`${API_BASE}/challenges/verify`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -436,7 +464,7 @@ function App() {
       };
 
       // Push progress to server
-      const resUpdate = await fetch(`${API_BASE}/user/${user.id}/progress`, {
+      const resUpdate = await apiFetch(`${API_BASE}/user/${user.id}/progress`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(progressUpdate)
@@ -484,7 +512,7 @@ function App() {
     if (!usernameInput || !passwordInput) return;
 
     try {
-      const res = await fetch(`${API_BASE}/user/register-account`, {
+      const res = await apiFetch(`${API_BASE}/user/register-account`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -496,8 +524,8 @@ function App() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Failed to create account');
       
+      saveSession(data);
       setUser(data);
-      localStorage.setItem('synapse_userId', data.id);
       setAuthSuccess(`Account created! Welome, ${data.username}`);
       setUsernameInput('');
       setPasswordInput('');
@@ -516,7 +544,7 @@ function App() {
     if (!usernameInput || !passwordInput) return;
 
     try {
-      const res = await fetch(`${API_BASE}/user/login`, {
+      const res = await apiFetch(`${API_BASE}/user/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -527,8 +555,9 @@ function App() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Login failed');
       
+      saveSession(data);
+      localStorage.removeItem('synapse_legacy_userId');
       setUser(data);
-      localStorage.setItem('synapse_userId', data.id);
       setAuthSuccess(`Logged in as ${data.username}`);
       setUsernameInput('');
       setPasswordInput('');
@@ -544,9 +573,9 @@ function App() {
     setAuthError('');
     setAuthSuccess('');
     try {
-      const res = await fetch(`${API_BASE}/user/forgot-password`, {
+      const res = await apiFetch(`${API_BASE}/user/forgot-password`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username: usernameInput, syncCode: forgotSyncCode, newPassword: newPasswordInput })
+        body: JSON.stringify({ username: usernameInput, syncCode: forgotSyncCode, newPassword: newPasswordInput, legacyUserId: localStorage.getItem('synapse_legacy_userId') })
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Password reset failed');
@@ -561,11 +590,13 @@ function App() {
   // Logout handler
   const handleLogout = async () => {
     localStorage.removeItem('synapse_userId');
+    localStorage.removeItem('synapse_token');
+    localStorage.removeItem('synapse_legacy_userId');
     // Register fresh guest profile
     try {
-      const res = await fetch(`${API_BASE}/user/register`, { method: 'POST' });
+      const res = await apiFetch(`${API_BASE}/user/register`, { method: 'POST' });
       const data = await res.json();
-      localStorage.setItem('synapse_userId', data.id);
+      saveSession(data);
       setUser(data);
       fetchChallenge(data.id, data.preferredLanguage);
       setAuthSuccess('Logged out successfully.');
@@ -578,7 +609,7 @@ function App() {
   const updateLanguage = async (lang) => {
     if (!user) return;
     try {
-      const res = await fetch(`${API_BASE}/user/${user.id}/language`, {
+      const res = await apiFetch(`${API_BASE}/user/${user.id}/language`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ language: lang })
@@ -599,10 +630,10 @@ function App() {
     setSyncStatus({ type: 'loading', message: 'Linking profiles...' });
     
     try {
-      const res = await fetch(`${API_BASE}/user/${user.id}/sync/link`, {
+      const res = await apiFetch(`${API_BASE}/user/${user.id}/sync/link`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ syncCode: syncCodeInput.trim() })
+        body: JSON.stringify({ syncCode: syncCodeInput.trim(), legacyUserId: localStorage.getItem('synapse_legacy_userId') })
       });
       
       if (!res.ok) {
@@ -611,7 +642,8 @@ function App() {
       }
 
       const mergedUser = await res.json();
-      localStorage.setItem('synapse_userId', mergedUser.id);
+      saveSession(mergedUser);
+      localStorage.removeItem('synapse_legacy_userId');
       setUser(mergedUser);
       setSyncStatus({ type: 'success', message: `Profiles synced successfully! Connected as ${mergedUser.nickname}` });
       setSyncCodeInput('');
@@ -629,7 +661,7 @@ function App() {
   };
 
   const renderCalendar = () => {
-    if (!user) return null;
+    if (!user) return <div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', color: 'white', background: '#030712', textAlign: 'center', padding: 24 }}><div><p>{startupError || 'Connecting to Synapse...'}</p><button className="btn-neon btn-cyan" onClick={() => window.location.reload()}>RETRY</button></div></div>;
     
     const dates = [];
     const today = new Date();
@@ -1000,11 +1032,11 @@ function App() {
                         {authMode === 'forgot' && <>
                           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                             <label style={{ fontSize: '11px', fontWeight: 'bold', color: 'var(--text-secondary)' }}>ACCOUNT SYNC CODE</label>
-                            <input className="sync-input" placeholder="6-character sync code" value={forgotSyncCode} onChange={e => setForgotSyncCode(e.target.value.toUpperCase())} maxLength={6} />
+                            <input className="sync-input" placeholder="Account sync code" value={forgotSyncCode} onChange={e => setForgotSyncCode(e.target.value.toUpperCase())} maxLength={32} />
                           </div>
                           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                             <label style={{ fontSize: '11px', fontWeight: 'bold', color: 'var(--text-secondary)' }}>NEW PASSWORD</label>
-                            <input type="password" className="sync-input" placeholder="At least 4 characters" value={newPasswordInput} onChange={e => setNewPasswordInput(e.target.value)} />
+                            <input type="password" className="sync-input" placeholder="At least 8 characters" value={newPasswordInput} onChange={e => setNewPasswordInput(e.target.value)} />
                           </div>
                         </>}
 
@@ -1071,10 +1103,10 @@ function App() {
                       placeholder="ENTER OTHER DEVICE CODE"
                       value={syncCodeInput}
                       onChange={(e) => setSyncCodeInput(e.target.value.toUpperCase())}
-                      maxLength="6"
+                      maxLength="32"
                       style={{ fontSize: '14px', letterSpacing: '2px', padding: '10px' }}
                     />
-                    <button type="submit" className="btn-neon btn-cyan" disabled={syncCodeInput.length !== 6}>
+                    <button type="submit" className="btn-neon btn-cyan" disabled={syncCodeInput.length < 6}>
                       LINK DEVICE PROGRESS
                     </button>
                   </form>
